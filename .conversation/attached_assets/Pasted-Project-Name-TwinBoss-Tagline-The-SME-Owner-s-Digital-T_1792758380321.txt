@@ -1,0 +1,65 @@
+Project Name: TwinBoss
+Tagline: The SME Owner’s Digital Twin. Less Busywork, Better Business.
+
+🎯 1. Executive Summary
+Micro and small business (SME) owners in Malaysia are the bottleneck of their own operations. They are burdened by constant, low-level decision fatigue—approving small refunds, discounts, and urgent purchases via WhatsApp while trying to run the business. TwinBoss is an AI-powered delegation plugin for the Orbyte ecosystem. It acts as a "Digital Twin" for the boss, analyzing staff requests against the owner's specific business rules and past decisions. It provides explainable recommendations, allowing the owner to approve, override, or simulate decisions with a single click, ensuring the business never stalls when the boss is unavailable.
+
+📈 2. SDG Alignment
+Primary SDG 8 (Decent Work and Economic Growth): Empowers micro-SMEs to operate efficiently without burning out the owner. Target 8.3: Support for entrepreneurship and the growth of micro, small, and medium-sized enterprises.
+
+Secondary SDG 9 (Industry, Innovation, and Infrastructure): Brings safe, accessible AI automation to traditionally non-digital businesses. Target 9.3: Increase access of small-scale enterprises to technology.
+
+🛠️ 3. The Tech Stack (Zero-Cost, High-Impact)
+We are building a highly efficient, modern prototype using the hackathon-provided resources:
+
+Hosting & Environment: Replit (Mandatory tool).
+
+Backend: Python (Flask). Lightweight, fast, and perfect for routing our API endpoints.
+
+Database: SQLite. Acts as our "Mock Orbyte Hub," storing synthetic data for customers, staff roles, rules, and activity logs.
+
+AI Engine: Groq API (Llama 3). We chose this over heavier models because it is incredibly fast, free, and highly capable of structured JSON output for our decision logic.
+
+Frontend: HTML/CSS/JavaScript. Built directly in Replit for a clean, responsive dashboard UI.
+
+⚙️ 4. The Features Breakdown
+🟢 The Basic Features (The "Must-Haves" for the Rubric)
+These features strictly follow the Domain 2 guidelines to ensure we score full points on Feasibility and Problem-Solution Fit.
+
+The Trigger (Staff Portal): A simple UI where a staff member submits a request (e.g., "Customer Siti requests a RM150 refund for a damaged item").
+
+Connected Data (Mock Orbyte Hub): The backend pulls data from our SQLite database to see that Siti is a "VIP" customer with a lifetime value of RM5,000.
+
+Decision Logic (AI Reasoning): The Groq LLM cross-references the request with the Boss's Rules (e.g., "Rule #1: Auto-approve VIP refunds under RM200").
+
+Human Approval (Boss Dashboard): The Boss sees an "Approval Queue." The AI explains its reasoning. The Boss has the final click.
+
+Visible Outcome (Decision Receipt): Once approved, the system generates a timestamped log (e.g., "14:32 - RM150 refund approved by Boss. Synced to Orbyte Hub") and confirms the action.
+
+✨ The Wow Features (To Win the 30% Innovation Score)
+These features elevate TwinBoss from a basic automation script to a strategic startup product.
+
+The Counterfactual Simulator (UI): Instead of just a "Yes/No" button, the AI offers strategic alternatives. It presents:
+
+✅ Approve Refund (AI Note: Resolves complaint, retains customer).
+
+🔄 Offer Store Credit (AI Note: Retains revenue, keeps customer happy).
+
+❌ Reject (AI Note: High risk of bad review).
+
+Learning from Corrections (Adaptive AI): If the Boss overrides the AI's recommendation, a pop-up asks: "Why did you override?" The AI then updates its memory (e.g., "Noted. I will require photo evidence for future refunds over RM100"). This demonstrates continuous learning.
+
+Decision Receipts (Explainable AI): The Activity Log is not just a boring list. It generates a detailed receipt showing exactly why an action happened: which staff member triggered it, which data points were used, which rule was applied, and who approved it. This bridges the "AI Confidence Gap."
+
+Role-Based Access Control (RBAC): The demo will feature a toggle between "Staff View" (where they can only submit) and "Boss View" (where they can approve/override), proving the system is secure.
+
+🔄 5. The User Journey (What the Demo Video Will Show)
+Staff Mode: Ahmad submits a RM150 refund request for Siti.
+
+AI Processing: The system queries the Mock Orbyte database and prompts the LLM.
+
+Boss Mode: The Boss sees the notification. The AI recommends "Approve" but offers the "Store Credit" counterfactual option.
+
+The Action: The Boss chooses "Store Credit." The AI asks for a reason, and the Boss selects "Cash flow protection."
+
+The Outcome: The AI confirms it has updated its learning, the request is marked as completed, and a Decision Receipt is generated and "synced" to Orbyte.
