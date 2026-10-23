@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "TwinBoss"
+description = "An AI-powered delegation app for Malaysian SME owners. Staff submit refund, discount, and purchase requests; TwinBoss applies business rules and customer context to recommend an action, then lets the owner approve, override, or explore alternatives with a clear decision receipt."
+version = "1.0.0"
+id = "artifacts/twinboss"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21828
+
+[services.development]
+run = "pnpm --filter @workspace/twinboss run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/twinboss", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/twinboss/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21828"
+BASE_PATH = "/"
