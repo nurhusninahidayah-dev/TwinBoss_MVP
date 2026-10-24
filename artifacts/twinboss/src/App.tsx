@@ -2,14 +2,14 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import {
   Activity, ArrowDownRight, ArrowUpRight, BadgeCheck, Banknote, BookOpen,
-  BriefcaseBusiness, Check, ChevronRight, CircleHelp, Clock3, FileCheck2,
-  HandCoins, Lightbulb, ListChecks, LoaderCircle, RefreshCw, ShieldCheck,
+  BriefcaseBusiness, Check, ChevronRight, CircleHelp, Clock3, Copy, FileCheck2,
+  HandCoins, Lightbulb, ListChecks, LoaderCircle, MessageCircle, RefreshCw, ShieldCheck,
   Sparkles, Users, Wallet, X,
 } from 'lucide-react';
 import {
   getGetActivityQueryKey, getGetDashboardSummaryQueryKey, getGetRequestQueryKey,
   getGetRequestsQueryKey,
-  useAnalyzeRequest, useCreateRequest, useDecideRequest, useGetActivity,
+  useAnalyzeRequest, useCreateRequest, useDecideRequest, useGenerateCustomerMessage, useGetActivity,
   useGetCustomers, useGetDashboardSummary, useGetRequest, useGetRequests, useGetRules,
 } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -61,6 +61,7 @@ function QueryError({ retry }: { retry: () => void }) {
 }
 function AppShell({ children, role, setRole }: { children: ReactNode; role: Role; setRole: (role: Role) => void }) {
   const [location, setLocation] = useLocation();
+  const [workflow, setWorkflow] = useState('refund');
   const navItems = [
     { href: '/', label: 'Boss dashboard', icon: BriefcaseBusiness },
     { href: '/staff', label: 'Staff request portal', icon: HandCoins },
@@ -95,7 +96,12 @@ function AppShell({ children, role, setRole }: { children: ReactNode; role: Role
       <header className="topbar">
         <div className="crumb">ORBYTE STUDIO <span style={{ padding: '0 7px', color: '#b5b4a6' }}>/</span> {location === '/' ? 'OVERVIEW' : location.slice(1).replace('-', ' ').toUpperCase()}</div>
         <div className="top-actions">
-          <div className="sync-mark"><span className="sync-dot" /> Orbyte demo sync</div>
+          <label className="workflow-picker"><span>WORKFLOW</span><select aria-label="Choose workflow" value={workflow} onChange={event => setWorkflow(event.target.value)} data-testid="select-workflow">
+            <option value="refund">Refund exceptions</option>
+            <option value="supplier" disabled>Supplier payments · Coming soon</option>
+            <option value="einvoice" disabled>E-invoicing · Coming soon</option>
+          </select></label>
+          <div className="sync-mark"><span className="sync-dot" /> Demo data</div>
           <div className="view-toggle" aria-label="Demo role toggle">
             <button className={role === 'boss' ? 'selected' : ''} onClick={() => updateRole('boss')} data-testid="button-role-boss">Boss view</button>
             <button className={role === 'staff' ? 'selected' : ''} onClick={() => updateRole('staff')} data-testid="button-role-staff">Staff view</button>
@@ -123,7 +129,9 @@ function DashboardPage({ notify }: { notify: (text: string, error?: boolean) => 
   const detailQuery = useGetRequest(selectedIdResolved, { query: { enabled: selectedIdResolved > 0, queryKey: getGetRequestQueryKey(selectedIdResolved) } });
   const analyze = useAnalyzeRequest();
   const decide = useDecideRequest();
+  const message = useGenerateCustomerMessage();
   const [receipt, setReceipt] = useState<{ receiptNumber: string; chosenAction: string; requestTitle: string } | null>(null);
+  const [messageDraft, setMessageDraft] = useState('');
   const summary = summaryQuery.data;
   const detail = detailQuery.data;
   const heading = dashboardGreeting();
@@ -163,8 +171,13 @@ function DashboardPage({ notify }: { notify: (text: string, error?: boolean) => 
     decide.mutate({ id: detail.id, data: { action, ...(reason?.trim() ? { reason: reason.trim() } : {}) } }, {
       onSuccess: async result => {
         setReceipt({ receiptNumber: result.receiptNumber, chosenAction: result.chosenAction, requestTitle: result.requestTitle });
+        setMessageDraft('');
         await invalidateDecisionData(detail.id);
         notify('Decision recorded. Receipt added to your activity trail.');
+        message.mutate({ id: detail.id }, {
+          onSuccess: result => setMessageDraft(result.draft),
+          onError: () => notify('Decision saved, but the WhatsApp draft could not be generated. Try again below.', true),
+        });
       },
       onError: error => notify(safeError(error), true),
     });
@@ -224,7 +237,12 @@ function DashboardPage({ notify }: { notify: (text: string, error?: boolean) => 
                 </div>
               </div>
               {decide.isPending && <div className="section-note" style={{ textAlign: 'center', marginTop: 8 }}>Recording your decision…</div>}
-              {receipt && <div className="receipt" role="status"><div className="receipt-num">RECEIPT {receipt.receiptNumber}</div><div className="receipt-title">{receipt.chosenAction.replace('_', ' ')} recorded</div><div className="section-note">{receipt.requestTitle} · synced to activity</div><Link href="/activity" className="section-note" style={{ display: 'inline-block', marginTop: 8, color: '#35644d', textDecoration: 'none' }} data-testid="link-open-receipt">View decision trail <ChevronRight size={12} style={{ verticalAlign: 'middle' }} /></Link></div>}
+              {receipt && <div className="receipt" role="status"><div className="receipt-num">RECEIPT {receipt.receiptNumber}</div><div className="receipt-title">{receipt.chosenAction.replace('_', ' ')} recorded</div><div className="section-note">{receipt.requestTitle} · decision saved to activity</div>
+                <div className="whatsapp-draft">
+                  <div className="ai-kicker"><MessageCircle size={13} /> Customer WhatsApp draft</div>
+                  {message.isPending ? <div className="section-note" style={{ marginTop: 8 }}>Writing a polite customer update…</div> : messageDraft ? <><p>{messageDraft}</p><button className="btn btn-quiet btn-sm" onClick={() => { void navigator.clipboard.writeText(messageDraft).then(() => notify('WhatsApp message copied.')).catch(() => notify('Could not access the clipboard. Select and copy the draft manually.', true)); }} data-testid="button-copy-whatsapp"><Copy size={13} /> Copy message</button></> : <button className="btn btn-quiet btn-sm" onClick={() => message.mutate({ id: detail.id }, { onSuccess: result => setMessageDraft(result.draft), onError: error => notify(safeError(error), true) })} disabled={message.isPending} data-testid="button-retry-whatsapp">Generate customer message</button>}
+                </div>
+                <Link href="/activity" className="section-note" style={{ display: 'inline-block', marginTop: 8, color: '#35644d', textDecoration: 'none' }} data-testid="link-open-receipt">View decision trail <ChevronRight size={12} style={{ verticalAlign: 'middle' }} /></Link></div>}
             </div>
           </>}
         </div>
@@ -233,25 +251,23 @@ function DashboardPage({ notify }: { notify: (text: string, error?: boolean) => 
   </div>;
 }
 
-function StaffPage({ notify }: { notify: (text: string, error?: boolean) => void }) {
+function StaffPage({ notify, setRole }: { notify: (text: string, error?: boolean) => void; setRole: (role: Role) => void }) {
   const client = useQueryClient();
+  const [, setLocation] = useLocation();
   const createRequest = useCreateRequest();
-  const [type, setType] = useState('refund');
   const [customerName, setCustomerName] = useState('');
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [staffName, setStaffName] = useState('');
-  const [submitted, setSubmitted] = useState<{ title: string; id: number } | null>(null);
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!customerName.trim() || !title.trim() || !staffName.trim() || !description.trim() || Number(amount) < 0 || amount === '') {
       notify('Please complete each field with valid details.', true);
       return;
     }
-    createRequest.mutate({ data: { type: type as 'refund' | 'discount' | 'purchase', customerName: customerName.trim(), title: title.trim(), amount: Number(amount), description: description.trim(), staffName: staffName.trim() } }, {
+    createRequest.mutate({ data: { type: 'refund', customerName: customerName.trim(), title: title.trim(), amount: Number(amount), description: description.trim(), staffName: staffName.trim() } }, {
       onSuccess: async result => {
-        setSubmitted({ title: result.title, id: result.id });
         setCustomerName(''); setTitle(''); setAmount(''); setDescription('');
         await Promise.all([
           client.invalidateQueries({ queryKey: getGetRequestsQueryKey() }),
@@ -259,20 +275,21 @@ function StaffPage({ notify }: { notify: (text: string, error?: boolean) => void
           client.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() }),
           client.invalidateQueries({ queryKey: getGetActivityQueryKey() }),
         ]);
-        notify('Request sent to Nadia’s decision queue.');
+        setRole('boss');
+        setLocation('/');
+        notify(`Request #${result.id} is now in Nadia’s approval queue.`);
       },
       onError: error => notify(safeError(error), true),
     });
   };
   return <div className="page">
     <PageHeading eyebrow="Team request portal" title="Hand off a small decision." text="Share the context. TwinBoss will organize the details so your owner can decide quickly." />
-    {submitted && <div className="receipt" style={{ maxWidth: 760, marginBottom: 20 }} data-testid="status-request-submitted"><div className="receipt-num">REQUEST #{submitted.id} · SENT FOR REVIEW</div><div className="receipt-title">{submitted.title}</div><div className="section-note">Nadia has the context and will make the final call.</div></div>}
     <div className="form-layout">
       <form className="panel form-panel" onSubmit={onSubmit}>
         <div className="section-head"><h2 className="section-title">Request details</h2><span className="section-note">Usually takes under a minute</span></div>
         <div className="field-grid">
           <div className="field"><label htmlFor="requester">Your name</label><input className="input" id="requester" value={staffName} onChange={event => setStaffName(event.target.value)} placeholder="e.g. Aina" required data-testid="input-staff-name" /></div>
-          <div className="field"><label htmlFor="request-type">What kind of decision?</label><select className="select" id="request-type" value={type} onChange={event => setType(event.target.value)} data-testid="select-request-type"><option value="refund">Refund</option><option value="discount">Discount</option><option value="purchase">Purchase</option></select></div>
+          <div className="field"><label htmlFor="request-type">Workflow</label><select className="select" id="request-type" value="refund" disabled data-testid="select-request-type"><option value="refund">Refund exception</option></select></div>
           <div className="field"><label htmlFor="customer">Customer name</label><input className="input" id="customer" value={customerName} onChange={event => setCustomerName(event.target.value)} placeholder="Who is this for?" required data-testid="input-customer-name" /></div>
           <div className="field"><label htmlFor="amount">Amount (MYR)</label><input className="input" id="amount" type="number" min="0" step="0.01" value={amount} onChange={event => setAmount(event.target.value)} placeholder="0.00" required data-testid="input-request-amount" /></div>
           <div className="field full"><label htmlFor="title">A short title</label><input className="input" id="title" value={title} onChange={event => setTitle(event.target.value)} placeholder="e.g. Replace damaged parcel" required data-testid="input-request-title" /></div>
@@ -389,7 +406,7 @@ function RouterContent() {
       <ErrorBoundary>
         <Switch>
           <Route path="/"><DashboardPage notify={notify} /></Route>
-          <Route path="/staff"><StaffPage notify={notify} /></Route>
+          <Route path="/staff"><StaffPage notify={notify} setRole={setRole} /></Route>
           <Route path="/activity"><ActivityPage notify={notify} /></Route>
           <Route path="/customers"><CustomersPage /></Route>
           <Route path="/rules"><RulesPage /></Route>
