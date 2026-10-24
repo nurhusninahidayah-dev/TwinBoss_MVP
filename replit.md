@@ -37,10 +37,11 @@ TwinBoss helps Malaysian SME owners delegate small operational decisions without
 - The owner always makes the final decision. A changed recommendation requires a reason, which is saved as an owner correction for future Groq recommendations.
 - The Staff/Boss toggle is for demos only, not authentication or server-enforced RBAC.
 - Customer records are mock Orbyte data; the displayed Orbyte sync is simulated and does not call an external Orbyte service.
+- Follow the Domain 2 brief: use only team-created synthetic data, simulate role permissions, focus the demo on Refund Exceptions, and do not imply access to the live Orbyte platform.
 
 ## Product
 
-Staff can submit refund, discount, and purchase requests. TwinBoss combines customer context and owner rules for an explainable Groq recommendation with alternatives. The owner can approve, choose store credit, or reject; every decision creates a receipt and appears in the activity trail.
+TwinBoss focuses on refund exceptions for Malaysian micro and small businesses. Staff submit a refund request; TwinBoss combines synthetic customer context and owner rules for an explainable Groq recommendation; the owner approves, chooses store credit, or rejects; the result is recorded in a decision receipt.
 
 ## User preferences
 
@@ -49,7 +50,9 @@ _Populate as you build — explicit user instructions worth remembering across s
 ## Gotchas
 
 - Re-run API code generation after every OpenAPI change before using generated types.
-- Recommendation requests send request descriptions and customer context to Groq; use synthetic data until a privacy policy and production handling are defined.
+- Use only team-created synthetic records in the demo. Recommendation requests send request descriptions and customer context to Groq.
+- If a requirement is unclear, ask the user before choosing an interpretation. Follow the attached Domain 2 brief and keep the design original rather than copying Orbyte or another product's screens.
+- Make commits at genuine, tested milestones with messages that describe the actual work; never split changes to misrepresent who or what contributed them.
 
 ## Pointers
 
