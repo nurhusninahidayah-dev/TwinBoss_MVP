@@ -5,7 +5,7 @@ type Role = 'staff' | 'boss';
 type DecisionAction = 'Approve Cash' | 'Offer Store Credit' | 'Reject';
 
 type Recommendation = {
-  recommendation: string;
+  recommendation: 'Approve' | 'Offer Store Credit' | 'Reject';
   reasoning: string;
   confidence: number;
 };
@@ -25,11 +25,9 @@ type GroqResponse = {
   choices?: Array<{ message?: { content?: string | null } }>;
 };
 
-const decisionActions: DecisionAction[] = [
-  'Approve Cash',
-  'Offer Store Credit',
-  'Reject',
-];
+function isRecommendation(value: unknown): value is Recommendation['recommendation'] {
+  return value === 'Approve' || value === 'Offer Store Credit' || value === 'Reject';
+}
 
 async function groqChat(
   systemPrompt: string,
@@ -52,7 +50,7 @@ async function groqChat(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama3-8b-8192',
+        model: 'openai/gpt-oss-20b',
         temperature: 0.2,
         max_tokens: jsonMode ? 180 : 180,
         ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
@@ -112,7 +110,7 @@ Consider both the matching rule and the missing tags. Recommend one option for t
   const recommendation = parsed as Record<string, unknown>;
   if (
     typeof recommendation.recommendation !== 'string' ||
-    !decisionActions.includes(recommendation.recommendation as DecisionAction) ||
+    !isRecommendation(recommendation.recommendation) ||
     typeof recommendation.reasoning !== 'string' ||
     !recommendation.reasoning.trim() ||
     typeof recommendation.confidence !== 'number' ||
@@ -154,7 +152,7 @@ function formatTime(timestamp: string): string {
 }
 
 function App() {
-  const [role, setRole] = useState<Role>('staff');
+  const [currentUser, setCurrentUser] = useState<Role | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [recommendationError, setRecommendationError] = useState('');
@@ -173,6 +171,7 @@ function App() {
   const isDecided = activity.length > 0;
 
   async function handleSubmitRequest() {
+    if (currentUser !== 'staff' || submitted || isSubmitting) return;
     setIsSubmitting(true);
     await new Promise((resolve) => window.setTimeout(resolve, 450));
     setSubmitted(true);
@@ -181,6 +180,7 @@ function App() {
   }
 
   async function handleGenerateRecommendation() {
+    if (currentUser !== 'boss' || !submitted || isDecided || isGeneratingRecommendation) return;
     setIsGeneratingRecommendation(true);
     setRecommendationError('');
     try {
@@ -196,6 +196,7 @@ function App() {
   }
 
   async function generateDraftForReceipt(receipt: DecisionReceipt) {
+    if (currentUser !== 'boss') return;
     setDraftLoadingId(receipt.id);
     setActivity((current) =>
       current.map((item) =>
@@ -227,7 +228,7 @@ function App() {
   }
 
   async function handleDecision(action: DecisionAction) {
-    if (isDecided || !recommendation) return;
+    if (currentUser !== 'boss' || !submitted || isDecided || !recommendation) return;
 
     const receipt: DecisionReceipt = {
       id: `TB-${Date.now().toString().slice(-6)}`,
@@ -240,6 +241,97 @@ function App() {
     setActivity((current) => [receipt, ...current]);
     await generateDraftForReceipt(receipt);
   }
+
+  function handleLogout() {
+    setCurrentUser(null);
+    setRecommendation(null);
+    setRecommendationError('');
+  }
+
+  if (currentUser === null) {
+    return (
+      <main className="app-grid flex min-h-screen items-center justify-center px-5 py-12">
+        <div className="w-full max-w-5xl overflow-hidden rounded-3xl border border-line bg-white shadow-panel">
+          <div className="grid md:grid-cols-[1fr_1.05fr]">
+            <section className="flex flex-col justify-between bg-forest p-8 text-white sm:p-10">
+              <a className="flex items-center gap-3" href="#" aria-label="TwinBoss home">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 text-lg font-black tracking-tight">
+                  tb
+                </span>
+                <span>
+                  <span className="block text-lg font-bold leading-5 tracking-tight">TwinBoss</span>
+                  <span className="mt-1 block text-xs text-white/70">Decisions, in sync</span>
+                </span>
+              </a>
+              <div className="py-12 md:py-16">
+                <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white/90">
+                  <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                  A smarter way to work together
+                </span>
+                <h1 className="mt-6 max-w-sm text-3xl font-bold leading-tight tracking-tight sm:text-4xl">
+                  Better decisions start with a better handoff.
+                </h1>
+                <p className="mt-4 max-w-sm text-sm leading-6 text-white/75">
+                  Give your team a clear path to raise requests, review the details, and keep every decision moving.
+                </p>
+              </div>
+              <p className="text-xs text-white/60">
+                Synthetic-data demo · No password required
+              </p>
+            </section>
+
+            <section className="flex flex-col justify-center p-7 sm:p-10">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-forest">
+                Welcome to TwinBoss
+              </p>
+              <h2 className="mt-2 text-2xl font-bold tracking-tight">Choose your workspace</h2>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                Select a demo account to continue. Each role has its own workspace and permissions.
+              </p>
+
+              <div className="mt-8 space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setCurrentUser('staff')}
+                  className="group flex w-full items-center gap-4 rounded-2xl border border-line bg-white p-4 text-left transition hover:border-forest/30 hover:bg-emerald-50/50 hover:shadow-sm focus-visible:outline-forest"
+                >
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-base font-bold text-amber-800">
+                    A
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold text-ink">Login as Staff (Ahmad)</span>
+                    <span className="mt-1 block text-sm text-muted">Submit requests to the owner</span>
+                  </span>
+                  <span className="text-lg text-muted transition group-hover:translate-x-1 group-hover:text-forest" aria-hidden="true">→</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setCurrentUser('boss')}
+                  className="group flex w-full items-center gap-4 rounded-2xl border border-line bg-white p-4 text-left transition hover:border-forest/30 hover:bg-emerald-50/50 hover:shadow-sm focus-visible:outline-forest"
+                >
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-base font-bold text-forest">
+                    B
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold text-ink">Login as Owner (Boss)</span>
+                    <span className="mt-1 block text-sm text-muted">Review and decide on requests</span>
+                  </span>
+                  <span className="text-lg text-muted transition group-hover:translate-x-1 group-hover:text-forest" aria-hidden="true">→</span>
+                </button>
+              </div>
+
+              <p className="mt-6 text-center text-xs leading-5 text-muted">
+                Demo access only · Role selection is simulated and is not secure authentication.
+              </p>
+            </section>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const workspaceTitle = currentUser === 'staff' ? 'Staff Portal' : 'Owner Approval Queue';
 
   return (
     <div className="min-h-screen bg-canvas text-ink">
@@ -256,36 +348,16 @@ function App() {
           </a>
 
           <div className="flex flex-wrap items-center gap-3">
-            <label className="sr-only" htmlFor="workflow">Workflow</label>
-            <select
-              id="workflow"
-              value="supplier"
-              disabled
-              className="h-10 cursor-not-allowed rounded-lg border border-line bg-gray-50 px-3 text-sm text-muted opacity-80"
+            <span className="rounded-full bg-emerald-50 px-3 py-2 text-sm font-semibold text-forest">
+              {workspaceTitle}
+            </span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-gray-50"
             >
-              <option value="supplier">Supplier Payments (Coming Soon)</option>
-            </select>
-
-            <div
-              className="flex rounded-xl border border-line bg-gray-50 p-1"
-              aria-label="Choose demo role"
-            >
-              {(['staff', 'boss'] as const).map((nextRole) => (
-                <button
-                  key={nextRole}
-                  type="button"
-                  onClick={() => setRole(nextRole)}
-                  aria-pressed={role === nextRole}
-                  className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
-                    role === nextRole
-                      ? 'bg-white text-forest shadow-sm'
-                      : 'text-muted hover:text-ink'
-                  }`}
-                >
-                  {nextRole === 'staff' ? 'Staff Mode' : 'Boss Mode'}
-                </button>
-              ))}
-            </div>
+              Logout
+            </button>
           </div>
         </div>
       </header>
@@ -298,10 +370,10 @@ function App() {
               Refund exceptions
             </div>
             <h1 className="max-w-2xl text-3xl font-bold tracking-tight sm:text-4xl">
-              {role === 'staff' ? 'A small decision, moving forward.' : 'Your team, in sync.'}
+              {currentUser === 'staff' ? 'A small decision, moving forward.' : 'Your team, in sync.'}
             </h1>
             <p className="mt-3 max-w-xl text-sm leading-6 text-muted sm:text-base">
-              {role === 'staff'
+              {currentUser === 'staff'
                 ? 'Send the context to your boss. TwinBoss keeps the details and the decision together.'
                 : 'Review the request, see why the AI recommends an option, then make the final call.'}
             </p>
@@ -312,6 +384,7 @@ function App() {
           </div>
         </section>
 
+        {currentUser === 'boss' && (
         <section className="mb-6 grid gap-4 sm:grid-cols-3" aria-label="Decision insights">
           <MetricCard
             label="Customer lifetime value"
@@ -332,13 +405,29 @@ function App() {
             icon={<span className="text-lg">◷</span>}
           />
         </section>
+        )}
 
-        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
+        <div className={currentUser === 'boss' ? 'grid items-start gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]' : 'mx-auto max-w-3xl'}>
+          {currentUser === 'boss' && !submitted ? (
+            <section className="rounded-2xl border border-dashed border-line bg-white px-6 py-14 text-center shadow-panel">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-xl text-forest">⌁</div>
+              <p className="mt-4 text-xs font-semibold uppercase tracking-[0.12em] text-muted">Owner approval queue</p>
+              <h2 className="mt-2 text-xl font-bold">No requests waiting</h2>
+              <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted">
+                Ahmad hasn&apos;t submitted a request yet. It will appear here as soon as the staff handoff is complete.
+              </p>
+            </section>
+          ) : (
+          <>
           <section className="overflow-hidden rounded-2xl border border-line bg-white shadow-panel">
             <div className="flex items-center justify-between border-b border-line px-5 py-4 sm:px-6">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">Incoming request</p>
-                <h2 className="mt-1 text-lg font-bold">Refund exception</h2>
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">
+                  {currentUser === 'staff' ? 'Request form' : 'Incoming request'}
+                </p>
+                <h2 className="mt-1 text-lg font-bold">
+                  {currentUser === 'staff' ? 'Refund request' : 'Ahmad’s refund request'}
+                </h2>
               </div>
               <span
                 className={`rounded-full px-3 py-1 text-xs font-semibold ${
@@ -349,7 +438,7 @@ function App() {
                       : 'bg-gray-100 text-muted'
                 }`}
               >
-                {isDecided ? 'Resolved' : submitted ? 'Awaiting review' : 'Draft'}
+                {isDecided ? 'Resolved' : submitted ? 'Pending Boss Approval' : 'Draft'}
               </span>
             </div>
 
@@ -391,17 +480,22 @@ function App() {
                 </div>
               </div>
 
-              {role === 'staff' && (
-                <div className="mt-6">
+              {currentUser === 'staff' && (
+                <form
+                  className="mt-6"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleSubmitRequest();
+                  }}
+                >
                   {submitted ? (
                     <div className="flex items-center gap-3 rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-forest" role="status">
                       <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white font-bold">✓</span>
-                      <span><strong>Sent to the Boss.</strong> The request is ready for review.</span>
+                      <span><strong>Pending Boss Approval.</strong> Ahmad&apos;s request is in the owner&apos;s queue.</span>
                     </div>
                   ) : (
                     <button
-                      type="button"
-                      onClick={handleSubmitRequest}
+                      type="submit"
                       disabled={isSubmitting}
                       className="flex w-full items-center justify-center gap-2 rounded-xl bg-forest px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-70"
                     >
@@ -413,11 +507,12 @@ function App() {
                   <p className="mt-3 text-center text-xs text-muted">
                     Local demo only · No real customer or payment data
                   </p>
-                </div>
+                </form>
               )}
             </div>
           </section>
 
+          {currentUser === 'boss' && (
           <section className="overflow-hidden rounded-2xl border border-line bg-white shadow-panel">
             <div className="border-b border-line px-5 py-4 sm:px-6">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">Human-in-the-loop review</p>
@@ -430,23 +525,7 @@ function App() {
             </div>
 
             <div className="p-5 sm:p-6">
-              {!submitted ? (
-                <div className="rounded-xl border border-dashed border-line bg-gray-50 p-6 text-center">
-                  <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-white text-xl text-muted shadow-sm">⌁</div>
-                  <h3 className="mt-3 text-sm font-bold">Waiting for the staff handoff</h3>
-                  <p className="mx-auto mt-1 max-w-xs text-sm leading-5 text-muted">
-                    Switch to Staff Mode and submit the request to start the review.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setRole('staff')}
-                    className="mt-4 text-sm font-semibold text-forest hover:underline"
-                  >
-                    Go to Staff Mode
-                  </button>
-                </div>
-              ) : (
-                <>
+              <>
                   {recommendation ? (
                     <div className="rounded-xl border border-violet-100 bg-gradient-to-br from-violet-50 to-white p-4 sm:p-5">
                       <div className="flex items-center justify-between gap-3">
@@ -531,30 +610,26 @@ function App() {
                       )}
                     </div>
                   )}
-                </>
-              )}
+              </>
             </div>
           </section>
+          )}
+          </>
+          )}
         </div>
 
+        {currentUser === 'boss' && isDecided && (
         <section className="mt-8 rounded-2xl border border-line bg-white shadow-panel">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4 sm:px-6">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">A clear audit trail</p>
-              <h2 className="mt-1 text-lg font-bold">Decision receipts</h2>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">Decision receipt · audit trail</p>
+              <h2 className="mt-1 text-lg font-bold">Activity log</h2>
             </div>
             <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-muted">
               {activity.length} {activity.length === 1 ? 'decision' : 'decisions'}
             </span>
           </div>
 
-          {activity.length === 0 ? (
-            <div className="px-6 py-10 text-center">
-              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-lg text-muted">⌖</div>
-              <p className="mt-3 text-sm font-semibold">No decisions yet</p>
-              <p className="mt-1 text-sm text-muted">Once the Boss chooses an option, the decision and message draft appear here.</p>
-            </div>
-          ) : (
             <ol className="divide-y divide-line">
               {activity.map((receipt) => (
                 <li key={receipt.id} className="px-5 py-5 sm:px-6">
@@ -607,8 +682,8 @@ function App() {
                 </li>
               ))}
             </ol>
-          )}
         </section>
+        )}
 
         <footer className="mt-8 flex flex-col gap-2 border-t border-line/80 py-5 text-xs leading-5 text-muted sm:flex-row sm:items-center sm:justify-between">
           <p>Fictional demo data · Decisions stay in this browser session · No messages or payments are sent</p>
