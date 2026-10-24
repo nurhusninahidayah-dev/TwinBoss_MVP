@@ -1,768 +1,1218 @@
-import { useEffect, useState } from 'react';
-import { businessRule, customer, refundRequest } from './mockData';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { businessRule, customers } from './mockData';
 
-type Role = 'staff' | 'boss';
-type DecisionAction = 'Approve Cash' | 'Offer Store Credit' | 'Reject';
+type Role = 'staff' | 'boss' | 'customer' | null;
+type Recommendation = 'Approve' | 'Offer Store Credit' | 'Reject';
+type Decision = 'Approve Cash' | 'Offer Store Credit' | 'Reject';
+type RequestStatus =
+  | 'customer-pending'
+  | 'boss-pending'
+  | 'approved-pending-execution'
+  | 'rejected'
+  | 'executed';
+type Language = 'English' | 'Malay';
 
-type Recommendation = {
-  recommendation: 'Approve' | 'Offer Store Credit' | 'Reject';
+interface AiAnalysis {
+  customer_name: string;
+  amount: number;
+  reason: string;
+  sentiment: 'Angry' | 'Neutral' | 'Polite';
+  recommendation: Recommendation;
   reasoning: string;
   confidence: number;
-};
+}
 
-type DecisionReceipt = {
+interface RefundRequest {
   id: string;
-  action: DecisionAction;
-  timestamp: string;
-  reasoning: string;
-  confidence: number;
-  message?: string;
-  messageError?: string;
-};
-
-type GroqResponse = {
-  error?: { message?: string };
-  choices?: Array<{ message?: { content?: string | null } }>;
-};
-
-function isRecommendation(value: unknown): value is Recommendation['recommendation'] {
-  return value === 'Approve' || value === 'Offer Store Credit' || value === 'Reject';
+  orderId: string;
+  message: string;
+  bankAccount: string;
+  photoAttached: boolean;
+  photoName: string;
+  submittedAt: string;
+  status: RequestStatus;
+  analysis?: AiAnalysis;
+  validityScore?: number;
+  decision?: Decision;
+  overrideReason?: string;
+  autoApproved?: boolean;
+  obId?: string;
+  draft?: string;
+  draftLanguage?: Language;
+  messageSent?: boolean;
+  paymentConfirmed?: boolean;
+  transactionId?: string;
+  receiptShared?: boolean;
 }
 
-async function groqChat(
-  systemPrompt: string,
-  userPrompt: string,
-  jsonMode = false,
-): Promise<string> {
-  const apiKey = import.meta.env.VITE_GROQ_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error(
-      'Add your Groq API key to .env as VITE_GROQ_API_KEY, then restart the dev server.',
-    );
-  }
+const decisions: Decision[] = ['Approve Cash', 'Offer Store Credit', 'Reject'];
+const languages: Language[] = ['English', 'Malay'];
 
-  const response = await fetch(
-    'https://api.groq.com/openai/v1/chat/completions',
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'openai/gpt-oss-20b',
-        temperature: 0.2,
-        max_tokens: jsonMode ? 180 : 180,
-        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-    },
-  );
-
-  const result = (await response.json()) as GroqResponse;
-  if (!response.ok) {
-    throw new Error(
-      result.error?.message ??
-        `Groq request failed (${response.status}). Check the key, model, and free-tier limits.`,
-    );
-  }
-
-  const content = result.choices?.[0]?.message?.content?.trim();
-  if (!content) {
-    throw new Error('Groq returned an empty response. Please try again.');
-  }
-  return content;
+function newId(prefix: string) {
+  return `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
-async function getRecommendation(): Promise<Recommendation> {
-  const content = await groqChat(
-    'You help a small Malaysian business owner review refund exceptions. Be concise and explain the strongest relevant factors. The owner always makes the final decision; do not claim the refund was automatically approved. Respond only with a JSON object containing exactly these fields: {"recommendation": "Approve", "reasoning": "Short reason", "confidence": 95}. recommendation must be one of "Approve", "Offer Store Credit", or "Reject". confidence must be an integer from 0 to 100.',
-    `Review this synthetic refund request.
-Customer: ${customer.name}, ${customer.tier}, lifetime value RM${customer.lifetimeValue}.
-Request: RM${refundRequest.amount} ${refundRequest.type.toLowerCase()} for "${refundRequest.reason}".
-Item tags returned: ${refundRequest.tagsReturned ? 'yes' : 'no'}.
-Staff note: submitted by ${refundRequest.submittedBy}.
-Business rule: ${businessRule.description}.
-Consider both the matching rule and the missing tags. Recommend one option for the owner to consider; do not take action.`,
-    true,
+function validityFor(request: Pick<RefundRequest, 'message' | 'photoAttached' | 'bankAccount'>) {
+  return (
+    (request.photoAttached ? 45 : 0) +
+    (request.bankAccount.trim() ? 35 : 0) +
+    (request.message.trim().length >= 20 ? 20 : request.message.trim() ? 10 : 0)
   );
+}
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error('Groq did not return valid JSON. Please generate the recommendation again.');
-  }
+function toDecision(recommendation: Recommendation): Decision {
+  return recommendation === 'Approve' ? 'Approve Cash' : recommendation;
+}
 
+function parseAnalysis(content: string): AiAnalysis {
+  const cleaned = content.replace(/```(?:json)?/gi, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error('The AI response did not contain a JSON object.');
+  const parsed: unknown = JSON.parse(cleaned.slice(start, end + 1));
+  if (!parsed || typeof parsed !== 'object') throw new Error('The AI response was not a valid object.');
+  const result = parsed as Record<string, unknown>;
+  const recommendations: Recommendation[] = ['Approve', 'Offer Store Credit', 'Reject'];
+  const sentiments = ['Angry', 'Neutral', 'Polite'];
   if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    !('recommendation' in parsed) ||
-    !('reasoning' in parsed) ||
-    !('confidence' in parsed)
+    typeof result.customer_name !== 'string' ||
+    typeof result.amount !== 'number' ||
+    !Number.isFinite(result.amount) ||
+    result.amount < 0 ||
+    typeof result.reason !== 'string' ||
+    !sentiments.includes(String(result.sentiment)) ||
+    !recommendations.includes(result.recommendation as Recommendation) ||
+    typeof result.reasoning !== 'string' ||
+    typeof result.confidence !== 'number' ||
+    !Number.isFinite(result.confidence)
   ) {
-    throw new Error('Groq returned an incomplete recommendation. Please try again.');
+    throw new Error('The AI response is missing required refund analysis fields.');
   }
-
-  const recommendation = parsed as Record<string, unknown>;
-  if (
-    typeof recommendation.recommendation !== 'string' ||
-    !isRecommendation(recommendation.recommendation) ||
-    typeof recommendation.reasoning !== 'string' ||
-    !recommendation.reasoning.trim() ||
-    typeof recommendation.confidence !== 'number' ||
-    !Number.isFinite(recommendation.confidence) ||
-    recommendation.confidence < 0 ||
-    recommendation.confidence > 100
-  ) {
-    throw new Error('Groq returned a recommendation in an unexpected format. Please try again.');
-  }
-
   return {
-    recommendation: recommendation.recommendation,
-    reasoning: recommendation.reasoning.trim(),
-    confidence: Math.round(recommendation.confidence),
+    customer_name: result.customer_name,
+    amount: result.amount,
+    reason: result.reason,
+    sentiment: result.sentiment as AiAnalysis['sentiment'],
+    recommendation: result.recommendation as Recommendation,
+    reasoning: result.reasoning,
+    confidence: Math.max(0, Math.min(100, result.confidence)),
   };
 }
 
-async function getWhatsAppDraft(action: DecisionAction): Promise<string> {
-  const content = await groqChat(
-    'Write one warm, polite WhatsApp message for a Malaysian small-business customer. Keep it under 60 words, use a natural tone, and do not invent facts. Return only the message text, with no quotation marks or heading.',
-    `Draft a message to ${customer.name} about her RM${refundRequest.amount} refund request for a ${refundRequest.reason.toLowerCase()}. The owner decided: ${action}. If approved, say the refund is approved. If store credit was offered, clearly describe it as store credit instead of cash. If rejected, apologize kindly and explain that the item tags were not returned. Do not say a message has already been sent.`,
+async function requestAiAnalysis(request: RefundRequest): Promise<AiAnalysis> {
+  const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+  if (!apiKey) throw new Error('AI is not configured. Add VITE_GROQ_API_KEY to your .env file.');
+  const customerProfiles = customers.map(({ name, tier, lifetimeValue }) => ({
+    name,
+    tier,
+    lifetimeValue,
+  }));
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'openai/gpt-oss-20b',
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: `You are an SME operations manager. Return only a strict JSON object with exactly these fields: customer_name (string), amount (number), reason (string), sentiment ("Angry", "Neutral", or "Polite"), recommendation ("Approve", "Offer Store Credit", or "Reject"), reasoning (short string), confidence (number from 0 to 100). Extract facts from the customer message; do not invent missing details. Match the customer against this local Orbyte CRM preview: ${JSON.stringify(customerProfiles)}. If the customer is unknown, use "New Customer". Apply this business rule when relevant: ${businessRule.description}. Consider photo-attached and bank-details-provided flags as validity context, but do not request or repeat bank account numbers.`,
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            order_id: request.orderId,
+            customer_message: request.message,
+            photo_attached: request.photoAttached,
+            bank_details_provided: Boolean(request.bankAccount.trim()),
+          }),
+        },
+      ],
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(
+      typeof payload?.error?.message === 'string'
+        ? payload.error.message
+        : `Groq request failed (${response.status}).`,
+    );
+  }
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string') throw new Error('Groq returned an empty analysis.');
+  const analysis = parseAnalysis(content);
+  const matchedCustomer = customers.find(
+    (customer) => customer.name.toLowerCase() === analysis.customer_name.trim().toLowerCase(),
   );
-  return content.replace(/^["']|["']$/g, '').trim();
+  if (matchedCustomer?.tier === 'VIP' && analysis.amount < businessRule.amountLimit) {
+    return {
+      ...analysis,
+      recommendation: 'Approve',
+      reasoning: `${analysis.reasoning} ${matchedCustomer.name}'s VIP rule supports approval under RM${businessRule.amountLimit}.`,
+    };
+  }
+  return analysis;
 }
 
-function formatRM(amount: number): string {
-  return new Intl.NumberFormat('en-MY', {
-    style: 'currency',
-    currency: 'MYR',
-    maximumFractionDigits: 0,
-  }).format(amount);
-}
-
-function formatTime(timestamp: string): string {
-  return new Intl.DateTimeFormat('en-MY', {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(timestamp));
+async function requestMessageDraft(
+  request: RefundRequest,
+  decision: Decision,
+  language: Language,
+): Promise<string> {
+  const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+  if (!apiKey) throw new Error('AI is not configured. Add VITE_GROQ_API_KEY to your .env file.');
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'openai/gpt-oss-20b',
+      temperature: 0.5,
+      messages: [
+        {
+          role: 'system',
+          content: `Write one warm, polite WhatsApp message in ${language === 'Malay' ? 'conversational Malaysian Malay (Bahasa Melayu)' : 'English'}. State the decision clearly, keep it concise, and do not invent payment timing. Return only the message text.`,
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            customer_name: request.analysis?.customer_name ?? 'Customer',
+            order_id: request.orderId,
+            amount: request.analysis?.amount ?? 0,
+            reason: request.analysis?.reason ?? 'refund request',
+            decision,
+          }),
+        },
+      ],
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(
+      typeof payload?.error?.message === 'string'
+        ? payload.error.message
+        : `Groq request failed (${response.status}).`,
+    );
+  }
+  const text = payload?.choices?.[0]?.message?.content;
+  if (typeof text !== 'string' || !text.trim()) throw new Error('Groq returned an empty message draft.');
+  return text.trim().replace(/^```(?:text)?\s*|\s*```$/gi, '');
 }
 
 function App() {
-  const [currentUser, setCurrentUser] = useState<Role | null>(null);
-  const [submitted, setSubmitted] = useState(false);
-  const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
-  const [recommendationError, setRecommendationError] = useState('');
-  const [isGeneratingRecommendation, setIsGeneratingRecommendation] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activity, setActivity] = useState<DecisionReceipt[]>([]);
-  const [draftLoadingId, setDraftLoadingId] = useState('');
+  const [currentUser, setCurrentUser] = useState<Role>(null);
+  const [requests, setRequests] = useState<RefundRequest[]>([]);
+  const [walletBalance, setWalletBalance] = useState(5000);
+  const [autoPilot, setAutoPilot] = useState(false);
+  const [activeStaffTab, setActiveStaffTab] = useState<'customer' | 'tasks'>('customer');
+  const [activeBossTab, setActiveBossTab] = useState<'queue' | 'activity'>('queue');
+  const [selectedStaffRequest, setSelectedStaffRequest] = useState<string | null>(null);
+  const [selectedBossRequest, setSelectedBossRequest] = useState<string | null>(null);
+  const [analysisLoadingId, setAnalysisLoadingId] = useState<string | null>(null);
+  const [draftLanguage, setDraftLanguage] = useState<Language>('English');
+  const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [pendingDecision, setPendingDecision] = useState<{ requestId: string; decision: Decision } | null>(
+    null,
+  );
+  const [paymentModalRequestId, setPaymentModalRequestId] = useState<string | null>(null);
+  const [paymentModalAudience, setPaymentModalAudience] = useState<'staff' | 'boss' | null>(null);
+  const [transferLoading, setTransferLoading] = useState(false);
+  const autoProcessedIds = useRef(new Set<string>());
+  const requestSequence = useRef(1);
+
+  const updateRequest = (id: string, update: (request: RefundRequest) => RefundRequest) => {
+    setRequests((items) => items.map((item) => (item.id === id ? update(item) : item)));
+  };
 
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(''), 3200);
-    return () => window.clearTimeout(timer);
+    const timeout = window.setTimeout(() => setToast(''), 3200);
+    return () => window.clearTimeout(timeout);
   }, [toast]);
 
-  const isDecided = activity.length > 0;
-
-  async function handleSubmitRequest() {
-    if (currentUser !== 'staff' || submitted || isSubmitting) return;
-    setIsSubmitting(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 450));
-    setSubmitted(true);
-    setIsSubmitting(false);
-    setToast('Request sent to the Boss review queue.');
-  }
-
-  async function handleGenerateRecommendation() {
-    if (currentUser !== 'boss' || !submitted || isDecided || isGeneratingRecommendation) return;
-    setIsGeneratingRecommendation(true);
-    setRecommendationError('');
-    try {
-      setRecommendation(await getRecommendation());
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Could not generate a recommendation.';
-      setRecommendationError(message);
-      setToast('Could not reach the AI. Check the setup and try again.');
-    } finally {
-      setIsGeneratingRecommendation(false);
-    }
-  }
-
-  async function generateDraftForReceipt(receipt: DecisionReceipt) {
-    if (currentUser !== 'boss') return;
-    setDraftLoadingId(receipt.id);
-    setActivity((current) =>
-      current.map((item) =>
-        item.id === receipt.id ? { ...item, messageError: undefined } : item,
-      ),
+  useEffect(() => {
+    if (!autoPilot) return;
+    const candidate = requests.find(
+      (request) =>
+        request.status === 'boss-pending' &&
+        request.analysis !== undefined &&
+        request.validityScore !== undefined &&
+        request.validityScore > 90 &&
+        request.analysis.amount < 50 &&
+        !autoProcessedIds.current.has(request.id),
     );
-    try {
-      const message = await getWhatsAppDraft(receipt.action);
-      setActivity((current) =>
-        current.map((item) =>
-          item.id === receipt.id
-            ? { ...item, message, messageError: undefined }
-            : item,
-        ),
-      );
-      setToast('Decision saved. Customer message draft is ready to review.');
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Could not generate the message draft.';
-      setActivity((current) =>
-        current.map((item) =>
-          item.id === receipt.id ? { ...item, messageError: message } : item,
-        ),
-      );
-      setToast('Decision saved, but the message draft could not be generated.');
-    } finally {
-      setDraftLoadingId('');
-    }
-  }
-
-  async function handleDecision(action: DecisionAction) {
-    if (currentUser !== 'boss' || !submitted || isDecided || !recommendation) return;
-
-    const receipt: DecisionReceipt = {
-      id: `TB-${Date.now().toString().slice(-6)}`,
-      action,
-      timestamp: new Date().toISOString(),
-      reasoning: recommendation.reasoning,
-      confidence: recommendation.confidence,
+    if (!candidate) return;
+    autoProcessedIds.current.add(candidate.id);
+    const approvedRequest: RefundRequest = {
+      ...candidate,
+      status: 'approved-pending-execution',
+      decision: 'Approve Cash',
+      autoApproved: true,
+      obId: newId('OB'),
+      draftLanguage,
     };
-
-    setActivity((current) => [receipt, ...current]);
-    await generateDraftForReceipt(receipt);
-  }
-
-  function handleLogout() {
-    setCurrentUser(null);
-    setRecommendation(null);
-    setRecommendationError('');
-  }
-
-  if (currentUser === null) {
-    return (
-      <main className="app-grid flex min-h-screen items-center justify-center px-5 py-12">
-        <div className="w-full max-w-5xl overflow-hidden rounded-3xl border border-line bg-white shadow-panel">
-          <div className="grid md:grid-cols-[1fr_1.05fr]">
-            <section className="flex flex-col justify-between bg-forest p-8 text-white sm:p-10">
-              <a className="flex items-center gap-3" href="#" aria-label="TwinBoss home">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 text-lg font-black tracking-tight">
-                  tb
-                </span>
-                <span>
-                  <span className="block text-lg font-bold leading-5 tracking-tight">TwinBoss</span>
-                  <span className="mt-1 block text-xs text-white/70">Decisions, in sync</span>
-                </span>
-              </a>
-              <div className="py-12 md:py-16">
-                <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white/90">
-                  <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                  A smarter way to work together
-                </span>
-                <h1 className="mt-6 max-w-sm text-3xl font-bold leading-tight tracking-tight sm:text-4xl">
-                  Better decisions start with a better handoff.
-                </h1>
-                <p className="mt-4 max-w-sm text-sm leading-6 text-white/75">
-                  Give your team a clear path to raise requests, review the details, and keep every decision moving.
-                </p>
-              </div>
-              <p className="text-xs text-white/60">
-                Synthetic-data demo · No password required
-              </p>
-            </section>
-
-            <section className="flex flex-col justify-center p-7 sm:p-10">
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-forest">
-                Welcome to TwinBoss
-              </p>
-              <h2 className="mt-2 text-2xl font-bold tracking-tight">Choose your workspace</h2>
-              <p className="mt-2 text-sm leading-6 text-muted">
-                Select a demo account to continue. Each role has its own workspace and permissions.
-              </p>
-
-              <div className="mt-8 space-y-3">
-                <button
-                  type="button"
-                  onClick={() => setCurrentUser('staff')}
-                  className="group flex w-full items-center gap-4 rounded-2xl border border-line bg-white p-4 text-left transition hover:border-forest/30 hover:bg-emerald-50/50 hover:shadow-sm focus-visible:outline-forest"
-                >
-                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-base font-bold text-amber-800">
-                    A
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-semibold text-ink">Login as Staff (Ahmad)</span>
-                    <span className="mt-1 block text-sm text-muted">Submit requests to the owner</span>
-                  </span>
-                  <span className="text-lg text-muted transition group-hover:translate-x-1 group-hover:text-forest" aria-hidden="true">→</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setCurrentUser('boss')}
-                  className="group flex w-full items-center gap-4 rounded-2xl border border-line bg-white p-4 text-left transition hover:border-forest/30 hover:bg-emerald-50/50 hover:shadow-sm focus-visible:outline-forest"
-                >
-                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-base font-bold text-forest">
-                    B
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-semibold text-ink">Login as Owner (Boss)</span>
-                    <span className="mt-1 block text-sm text-muted">Review and decide on requests</span>
-                  </span>
-                  <span className="text-lg text-muted transition group-hover:translate-x-1 group-hover:text-forest" aria-hidden="true">→</span>
-                </button>
-              </div>
-
-              <p className="mt-6 text-center text-xs leading-5 text-muted">
-                Demo access only · Role selection is simulated and is not secure authentication.
-              </p>
-            </section>
-          </div>
-        </div>
-      </main>
+    setRequests((items) =>
+      items.map((item) => (item.id === candidate.id ? approvedRequest : item)),
     );
-  }
+    setPaymentModalRequestId(candidate.id);
+    setPaymentModalAudience('staff');
+    setToast(`${candidate.orderId} met Auto-Pilot criteria and is in the activity log.`);
+    void requestMessageDraft(approvedRequest, 'Approve Cash', draftLanguage)
+      .then((draft) => updateRequest(candidate.id, (item) => ({ ...item, draft })))
+      .catch((draftError: unknown) => {
+        setError(draftError instanceof Error ? draftError.message : 'Could not generate the customer message.');
+      });
+  }, [autoPilot, requests, draftLanguage]);
 
-  const workspaceTitle = currentUser === 'staff' ? 'Staff Portal' : 'Owner Approval Queue';
+  const analyzeRequest = async (request: RefundRequest) => {
+    setError('');
+    setAnalysisLoadingId(request.id);
+    setSelectedStaffRequest(request.id);
+    try {
+      const analysis = await requestAiAnalysis(request);
+      updateRequest(request.id, (item) => ({
+        ...item,
+        analysis,
+        validityScore: validityFor(item),
+      }));
+    } catch (analysisError) {
+      setError(analysisError instanceof Error ? analysisError.message : 'Could not analyze this request.');
+    } finally {
+      setAnalysisLoadingId(null);
+    }
+  };
+
+  const handleBossReanalysis = async (request: RefundRequest) => {
+    setError('');
+    setAnalysisLoadingId(request.id);
+    try {
+      const analysis = await requestAiAnalysis(request);
+      updateRequest(request.id, (item) => ({ ...item, analysis }));
+    } catch (analysisError) {
+      setError(analysisError instanceof Error ? analysisError.message : 'Could not analyze this request.');
+    } finally {
+      setAnalysisLoadingId(null);
+    }
+  };
+
+  const submitToBoss = (request: RefundRequest) => {
+    if (!request.analysis || request.validityScore === undefined) return;
+    updateRequest(request.id, (item) => ({ ...item, status: 'boss-pending' }));
+    setSelectedStaffRequest(null);
+    setToast(`${request.orderId} sent to the Owner Approval Queue.`);
+  };
+
+  const applyDecision = async (
+    request: RefundRequest,
+    decision: Decision,
+    overrideReason?: string,
+  ) => {
+    const nextRequest: RefundRequest = {
+      ...request,
+      status: decision === 'Reject' ? 'rejected' : 'approved-pending-execution',
+      decision,
+      overrideReason,
+      autoApproved: false,
+      obId: newId('OB'),
+      draftLanguage,
+    };
+    updateRequest(request.id, () => nextRequest);
+    setPendingDecision(null);
+    if (decision === 'Approve Cash') {
+      setPaymentModalRequestId(request.id);
+      setPaymentModalAudience('boss');
+    }
+    setError('');
+    try {
+      const draft = await requestMessageDraft(nextRequest, decision, draftLanguage);
+      updateRequest(request.id, (item) => ({ ...item, draft }));
+    } catch (draftError) {
+      setError(draftError instanceof Error ? draftError.message : 'Could not generate the customer message.');
+    }
+  };
+
+  const chooseDecision = (request: RefundRequest, decision: Decision) => {
+    const recommendedDecision = request.analysis ? toDecision(request.analysis.recommendation) : null;
+    if (recommendedDecision && recommendedDecision !== decision) {
+      setPendingDecision({ requestId: request.id, decision });
+    } else {
+      void applyDecision(request, decision);
+    }
+  };
+
+  const confirmTransfer = async (request: RefundRequest) => {
+    if (!request.analysis || request.transactionId || !request.bankAccount.trim()) return;
+    if (request.analysis.amount > walletBalance) {
+      setError('The available business cash is not enough for this transfer.');
+      return;
+    }
+    setError('');
+    setTransferLoading(true);
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    const transactionId = newId('TXN');
+    setWalletBalance((balance) => balance - request.analysis!.amount);
+    updateRequest(request.id, (item) => ({
+      ...item,
+      paymentConfirmed: true,
+      transactionId,
+    }));
+    setTransferLoading(false);
+  };
+
+  const sendMessage = (request: RefundRequest) => {
+    updateRequest(request.id, (item) => ({ ...item, messageSent: true }));
+    setToast(`Customer message marked as sent for ${request.orderId}.`);
+  };
+
+  const shareReceipt = (request: RefundRequest) => {
+    updateRequest(request.id, (item) => ({
+      ...item,
+      receiptShared: true,
+      status: item.status === 'rejected' ? 'rejected' : 'executed',
+    }));
+    setToast(`Receipt marked as shared for ${request.orderId}.`);
+  };
+
+  const handleCustomerSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const file = form.get('damage-photo');
+    const request: RefundRequest = {
+      id: `REQ-${String(requestSequence.current++).padStart(4, '0')}`,
+      orderId: String(form.get('order-id') ?? '').trim(),
+      message: String(form.get('issue') ?? '').trim(),
+      bankAccount: String(form.get('bank-account') ?? '').trim(),
+      photoAttached: file instanceof File && file.size > 0,
+      photoName: file instanceof File ? file.name : '',
+      submittedAt: new Date().toISOString(),
+      status: 'customer-pending',
+    };
+    setRequests((items) => [request, ...items]);
+    event.currentTarget.reset();
+    setToast(`Request ${request.orderId} was submitted.`);
+  };
+
+  const logout = () => {
+    setCurrentUser(null);
+    setSelectedStaffRequest(null);
+    setSelectedBossRequest(null);
+    setError('');
+    setPaymentModalRequestId(null);
+  };
+
+  const selectedPaymentRequest = requests.find((request) => request.id === paymentModalRequestId);
+  const canSeePaymentModal =
+    currentUser !== null && currentUser === paymentModalAudience && selectedPaymentRequest !== undefined;
 
   return (
-    <div className="min-h-screen bg-canvas text-ink">
-      <header className="border-b border-line bg-white/90">
+    <div className="min-h-screen bg-[#f5f7f4] text-[#17241f]">
+      <header className="border-b border-[#e5ebe6] bg-white">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-5 py-4 sm:px-8">
-          <a className="flex items-center gap-3" href="#" aria-label="TwinBoss home">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-forest text-lg font-black tracking-tight text-white shadow-sm">
-              tb
+          <button
+            className="flex items-center gap-3 text-left"
+            onClick={() => setCurrentUser(null)}
+            aria-label="TwinBoss home"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#173e32] text-sm font-bold text-white">
+              TB
             </span>
-            <span>
-              <span className="block text-lg font-bold leading-5 tracking-tight">TwinBoss</span>
-              <span className="mt-1 block text-xs text-muted">Decisions, in sync</span>
-            </span>
-          </a>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="rounded-full bg-emerald-50 px-3 py-2 text-sm font-semibold text-forest">
-              {workspaceTitle}
-            </span>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-gray-50"
-            >
-              Logout
-            </button>
+            <span className="text-lg font-semibold tracking-tight">TwinBoss</span>
+          </button>
+          <span
+            className="inline-flex items-center gap-2 rounded-full border border-[#d9e9df] bg-[#f2f8f3] px-3 py-1.5 text-xs font-medium text-[#386b4d]"
+            title="Orbyte-branded preview; no live Orbyte API is configured."
+          >
+            <span className="h-2 w-2 rounded-full bg-[#49a46a]" />
+            Orbyte Hub · Preview
+          </span>
+          <div className="flex items-center gap-3">
+            {currentUser === 'boss' && (
+              <span className="rounded-lg bg-[#f3f6f3] px-3 py-2 text-sm font-medium text-[#365247]">
+                Business Cash <span className="ml-1 font-semibold">RM {walletBalance.toLocaleString()}</span>
+              </span>
+            )}
+            {currentUser && (
+              <button className="button-secondary !px-3 !py-2 text-sm" onClick={logout}>
+                Logout
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      <main className="app-grid mx-auto min-h-[calc(100vh-73px)] max-w-7xl px-5 py-8 sm:px-8 sm:py-12">
-        <section className="mb-8 flex flex-col justify-between gap-6 md:flex-row md:items-end">
-          <div>
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-white px-3 py-1.5 text-xs font-semibold text-forest shadow-sm">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              Refund exceptions
+      <main className="app-grid min-h-[calc(100vh-73px)] px-4 py-8 sm:px-8 sm:py-12">
+        <div className="mx-auto max-w-7xl">
+          {error && (
+            <div role="alert" className="mb-5 flex items-start justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <span>{error}</span>
+              <button aria-label="Dismiss error" onClick={() => setError('')} className="font-semibold">
+                ×
+              </button>
             </div>
-            <h1 className="max-w-2xl text-3xl font-bold tracking-tight sm:text-4xl">
-              {currentUser === 'staff' ? 'A small decision, moving forward.' : 'Your team, in sync.'}
-            </h1>
-            <p className="mt-3 max-w-xl text-sm leading-6 text-muted sm:text-base">
-              {currentUser === 'staff'
-                ? 'Send the context to your boss. TwinBoss keeps the details and the decision together.'
-                : 'Review the request, see why the AI recommends an option, then make the final call.'}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 self-start rounded-full bg-white px-3 py-2 text-xs font-medium text-muted shadow-sm md:self-auto">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            Demo workspace · Synthetic data
-          </div>
-        </section>
-
-        {currentUser === 'boss' && (
-        <section className="mb-6 grid gap-4 sm:grid-cols-3" aria-label="Decision insights">
-          <MetricCard
-            label="Customer lifetime value"
-            value={formatRM(customer.lifetimeValue)}
-            detail="Siti · VIP customer"
-            icon={<span className="text-lg">↗</span>}
-          />
-          <MetricCard
-            label="Owner rule"
-            value={`Under ${formatRM(businessRule.amountLimit)}`}
-            detail="VIP refund exception"
-            icon={<span className="text-lg">✓</span>}
-          />
-          <MetricCard
-            label="Time returned to the team"
-            value={activity.length ? `${activity.length * 8} min` : '8 min'}
-            detail={activity.length ? 'Estimated · decisions logged' : 'Estimated per review'}
-            icon={<span className="text-lg">◷</span>}
-          />
-        </section>
-        )}
-
-        <div className={currentUser === 'boss' ? 'grid items-start gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]' : 'mx-auto max-w-3xl'}>
-          {currentUser === 'boss' && !submitted ? (
-            <section className="rounded-2xl border border-dashed border-line bg-white px-6 py-14 text-center shadow-panel">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-xl text-forest">⌁</div>
-              <p className="mt-4 text-xs font-semibold uppercase tracking-[0.12em] text-muted">Owner approval queue</p>
-              <h2 className="mt-2 text-xl font-bold">No requests waiting</h2>
-              <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted">
-                Ahmad hasn&apos;t submitted a request yet. It will appear here as soon as the staff handoff is complete.
-              </p>
-            </section>
-          ) : (
-          <>
-          <section className="overflow-hidden rounded-2xl border border-line bg-white shadow-panel">
-            <div className="flex items-center justify-between border-b border-line px-5 py-4 sm:px-6">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">
-                  {currentUser === 'staff' ? 'Request form' : 'Incoming request'}
-                </p>
-                <h2 className="mt-1 text-lg font-bold">
-                  {currentUser === 'staff' ? 'Refund request' : 'Ahmad’s refund request'}
-                </h2>
-              </div>
-              <span
-                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  isDecided
-                    ? 'bg-slate-100 text-slate-600'
-                    : submitted
-                      ? 'bg-amber-50 text-amber-700'
-                      : 'bg-gray-100 text-muted'
-                }`}
-              >
-                {isDecided ? 'Resolved' : submitted ? 'Pending Boss Approval' : 'Draft'}
-              </span>
-            </div>
-
-            <div className="p-5 sm:p-6">
-              <div className="mb-6 flex items-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-xl font-bold text-forest">
-                  {customer.initials}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-lg font-bold">{customer.name}</h3>
-                    <span className="rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-700">
-                      {customer.tier}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-sm text-muted">Customer since 2021 · LTV {formatRM(customer.lifetimeValue)}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs text-muted">Request amount</p>
-                  <p className="mt-1 text-2xl font-bold tracking-tight">{formatRM(refundRequest.amount)}</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <DetailItem label="Request type" value={refundRequest.type} />
-                <DetailItem label="Reason" value={refundRequest.reason} />
-                <DetailItem label="Item tags" value={refundRequest.tagsReturned ? 'Returned' : 'Not returned'} />
-                <DetailItem label="Submitted by" value={refundRequest.submittedBy} />
-              </div>
-
-              <div className="mt-4 flex items-start gap-3 rounded-xl border border-emerald-100 bg-emerald-50/70 p-4">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-forest shadow-sm">✓</span>
-                <div>
-                  <p className="text-sm font-semibold text-ink">Relevant business rule</p>
-                  <p className="mt-1 text-sm leading-5 text-muted">{businessRule.description}</p>
-                  <p className="mt-2 text-xs font-medium text-forest">
-                    Request is {formatRM(businessRule.amountLimit - refundRequest.amount)} below this rule&apos;s limit
-                  </p>
-                </div>
-              </div>
-
-              {currentUser === 'staff' && (
-                <form
-                  className="mt-6"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void handleSubmitRequest();
-                  }}
-                >
-                  {submitted ? (
-                    <div className="flex items-center gap-3 rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-forest" role="status">
-                      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white font-bold">✓</span>
-                      <span><strong>Pending Boss Approval.</strong> Ahmad&apos;s request is in the owner&apos;s queue.</span>
-                    </div>
-                  ) : (
-                    <button
-                      type="submit"
-                      disabled={isSubmitting}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-forest px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-70"
-                    >
-                      {isSubmitting ? <span className="spinner" /> : null}
-                      {isSubmitting ? 'Sending request…' : 'Submit to Boss'}
-                      {!isSubmitting ? <span aria-hidden="true">→</span> : null}
-                    </button>
-                  )}
-                  <p className="mt-3 text-center text-xs text-muted">
-                    Local demo only · No real customer or payment data
-                  </p>
-                </form>
-              )}
-            </div>
-          </section>
-
-          {currentUser === 'boss' && (
-          <section className="overflow-hidden rounded-2xl border border-line bg-white shadow-panel">
-            <div className="border-b border-line px-5 py-4 sm:px-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">Human-in-the-loop review</p>
-              <div className="mt-1 flex items-center justify-between gap-3">
-                <h2 className="text-lg font-bold">Boss decision</h2>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700">
-                  <span aria-hidden="true">✦</span> AI assist
-                </span>
-              </div>
-            </div>
-
-            <div className="p-5 sm:p-6">
-              <>
-                  {recommendation ? (
-                    <div className="rounded-xl border border-violet-100 bg-gradient-to-br from-violet-50 to-white p-4 sm:p-5">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-xs font-semibold uppercase tracking-[0.1em] text-violet-700">TwinBoss recommends</span>
-                        <span className="text-sm font-bold text-violet-800">{recommendation.confidence}% confidence</span>
-                      </div>
-                      <h3 className="mt-2 text-2xl font-bold tracking-tight">{recommendation.recommendation}</h3>
-                      <p className="mt-2 text-sm leading-6 text-muted">{recommendation.reasoning}</p>
-                      <div
-                        className="mt-4 h-2 overflow-hidden rounded-full bg-violet-100"
-                        role="meter"
-                        aria-label="AI confidence"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={recommendation.confidence}
-                      >
-                        <div
-                          className="h-full rounded-full bg-violet-500 transition-all"
-                          style={{ width: `${recommendation.confidence}%` }}
-                        />
-                      </div>
-                      <p className="mt-3 text-xs leading-5 text-muted">
-                        Confidence reflects the model&apos;s estimate, not a guarantee. Your rule and the missing tags are shown above. You make the final decision.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-dashed border-violet-200 bg-violet-50/50 p-5">
-                      <p className="text-sm font-semibold">Give the request a second opinion.</p>
-                      <p className="mt-1 text-sm leading-5 text-muted">
-                        TwinBoss weighs the VIP rule against the damaged item and missing tags. Nothing is approved automatically.
-                      </p>
-                    </div>
-                  )}
-
-                  {recommendationError && (
-                    <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm leading-5 text-rose-700" role="alert">
-                      {recommendationError}
-                    </p>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={handleGenerateRecommendation}
-                    disabled={isGeneratingRecommendation || isDecided}
-                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-3 text-sm font-semibold text-violet-800 transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isGeneratingRecommendation ? <span className="spinner" /> : <span aria-hidden="true">✦</span>}
-                    {isGeneratingRecommendation
-                      ? 'Reviewing the request…'
-                      : recommendation
-                        ? 'Generate AI recommendation again'
-                        : 'Generate AI Recommendation'}
-                  </button>
-
-                  {recommendation && (
-                    <div className="mt-5">
-                      <p className="mb-3 text-xs font-semibold uppercase tracking-[0.1em] text-muted">Your decision · choose one</p>
-                      <div className="grid gap-2 sm:grid-cols-3">
-                        <DecisionButton
-                          action="Approve Cash"
-                          onClick={handleDecision}
-                          disabled={isDecided}
-                          style="primary"
-                        />
-                        <DecisionButton
-                          action="Offer Store Credit"
-                          onClick={handleDecision}
-                          disabled={isDecided}
-                          style="secondary"
-                        />
-                        <DecisionButton
-                          action="Reject"
-                          onClick={handleDecision}
-                          disabled={isDecided}
-                          style="quiet"
-                        />
-                      </div>
-                      {isDecided && (
-                        <p className="mt-3 text-center text-xs text-muted" role="status">
-                          Decision recorded for this demo request.
-                        </p>
-                      )}
-                    </div>
-                  )}
-              </>
-            </div>
-          </section>
           )}
-          </>
+
+          {!currentUser && <LoginScreen onLogin={setCurrentUser} />}
+          {currentUser === 'customer' && <CustomerPortal onSubmit={handleCustomerSubmit} />}
+          {currentUser === 'staff' && (
+            <StaffWorkspace
+              requests={requests}
+              activeTab={activeStaffTab}
+              onTabChange={setActiveStaffTab}
+              selectedId={selectedStaffRequest}
+              onSelect={(request) => void analyzeRequest(request)}
+              onRetryAnalyze={(request) => void analyzeRequest(request)}
+              loadingId={analysisLoadingId}
+              onSubmitToBoss={submitToBoss}
+              onOpenPayment={(request) => {
+                setPaymentModalRequestId(request.id);
+                setPaymentModalAudience('staff');
+              }}
+              onSendMessage={sendMessage}
+              onShareReceipt={shareReceipt}
+            />
+          )}
+          {currentUser === 'boss' && (
+            <BossWorkspace
+              requests={requests}
+              activeTab={activeBossTab}
+              onTabChange={setActiveBossTab}
+              selectedId={selectedBossRequest}
+              onSelect={setSelectedBossRequest}
+              autoPilot={autoPilot}
+              onAutoPilotChange={setAutoPilot}
+              onGenerate={handleBossReanalysis}
+              loadingId={analysisLoadingId}
+              onDecision={chooseDecision}
+              language={draftLanguage}
+              onLanguageChange={setDraftLanguage}
+            />
           )}
         </div>
-
-        {currentUser === 'boss' && isDecided && (
-        <section className="mt-8 rounded-2xl border border-line bg-white shadow-panel">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4 sm:px-6">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">Decision receipt · audit trail</p>
-              <h2 className="mt-1 text-lg font-bold">Activity log</h2>
-            </div>
-            <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-muted">
-              {activity.length} {activity.length === 1 ? 'decision' : 'decisions'}
-            </span>
-          </div>
-
-            <ol className="divide-y divide-line">
-              {activity.map((receipt) => (
-                <li key={receipt.id} className="px-5 py-5 sm:px-6">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex items-start gap-3">
-                      <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-50 font-bold text-forest">✓</span>
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="font-bold">{receipt.action}</h3>
-                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-muted">
-                            {refundRequest.id}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-sm text-muted">
-                          {customer.name} · {formatRM(refundRequest.amount)} · {receipt.reasoning}
-                        </p>
-                      </div>
-                    </div>
-                    <time className="text-xs text-muted" dateTime={receipt.timestamp}>
-                      {formatTime(receipt.timestamp)}
-                    </time>
-                  </div>
-
-                  <div className="ml-12 mt-4 rounded-xl bg-gray-50 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs font-bold uppercase tracking-[0.1em] text-muted">WhatsApp message draft</p>
-                      <span className="text-[11px] font-medium text-muted">Review before sharing · not sent</span>
-                    </div>
-                    {receipt.message ? (
-                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-ink">{receipt.message}</p>
-                    ) : draftLoadingId === receipt.id ? (
-                      <p className="mt-3 flex items-center gap-2 text-sm text-muted" role="status">
-                        <span className="spinner text-forest" /> Writing a polite customer update…
-                      </p>
-                    ) : receipt.messageError ? (
-                      <div className="mt-3">
-                        <p className="text-sm leading-5 text-rose-700" role="alert">{receipt.messageError}</p>
-                        <button
-                          type="button"
-                          onClick={() => generateDraftForReceipt(receipt)}
-                          className="mt-2 text-sm font-semibold text-forest hover:underline"
-                        >
-                          Try generating the draft again
-                        </button>
-                      </div>
-                    ) : (
-                      <p className="mt-2 text-sm text-muted">Message draft is being prepared.</p>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ol>
-        </section>
-        )}
-
-        <footer className="mt-8 flex flex-col gap-2 border-t border-line/80 py-5 text-xs leading-5 text-muted sm:flex-row sm:items-center sm:justify-between">
-          <p>Fictional demo data · Decisions stay in this browser session · No messages or payments are sent</p>
-          <p>AI assists. People decide.</p>
-        </footer>
       </main>
 
       {toast && (
-        <div
-          className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-ink px-5 py-3 text-sm font-medium text-white shadow-xl"
-          role="status"
-          aria-live="polite"
-        >
+        <div role="status" className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2 rounded-xl bg-[#173e32] px-5 py-3 text-sm font-medium text-white shadow-xl">
           {toast}
         </div>
+      )}
+
+      {pendingDecision && (
+        <OverrideModal
+          onChoose={(reason) => {
+            const request = requests.find((item) => item.id === pendingDecision.requestId);
+            if (request) void applyDecision(request, pendingDecision.decision, reason);
+          }}
+          onCancel={() => setPendingDecision(null)}
+        />
+      )}
+
+      {canSeePaymentModal && selectedPaymentRequest && (
+        <PaymentModal
+          request={selectedPaymentRequest}
+          walletBalance={walletBalance}
+          loading={transferLoading}
+          onConfirm={() => void confirmTransfer(selectedPaymentRequest)}
+          onClose={() => {
+            setPaymentModalRequestId(null);
+            setPaymentModalAudience(null);
+          }}
+        />
       )}
     </div>
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  detail,
-  icon,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  icon: React.ReactNode;
-}) {
+function LoginScreen({ onLogin }: { onLogin: (role: Role) => void }) {
   return (
-    <div className="rounded-2xl border border-line bg-white p-4 shadow-panel sm:p-5">
-      <div className="flex items-start justify-between">
-        <p className="text-xs font-medium text-muted">{label}</p>
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 font-bold text-forest">{icon}</span>
+    <section className="animate-fade-up mx-auto max-w-4xl pt-8 sm:pt-14">
+      <div className="mx-auto max-w-2xl text-center">
+        <span className="eyebrow">Refund operations, in sync</span>
+        <h1 className="mt-5 text-4xl font-semibold tracking-tight text-[#173e32] sm:text-5xl">
+          A clearer path from request to resolution.
+        </h1>
+        <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-[#68776f]">
+          Customer requests, staff validation, and owner decisions: together in one workspace.
+        </p>
       </div>
-      <p className="mt-3 text-2xl font-bold tracking-tight">{value}</p>
-      <p className="mt-1 text-xs text-muted">{detail}</p>
-    </div>
+      <div className="mx-auto mt-10 grid max-w-3xl gap-4 md:grid-cols-3">
+        <LoginCard title="Customer Portal" description="Open a refund request with your order details." button="Continue as Customer" onClick={() => onLogin('customer')} />
+        <LoginCard title="Staff Portal" description="Review incoming requests and prepare them for approval." button="Login as Staff (Ahmad)" onClick={() => onLogin('staff')} />
+        <LoginCard title="Owner Workspace" description="Review recommendations, decisions, and activity." button="Login as Owner (Boss)" onClick={() => onLogin('boss')} />
+      </div>
+      <p className="mt-8 text-center text-xs text-[#859189]">
+        Orbyte CRM and activity references are shown as a workspace preview.
+      </p>
+    </section>
   );
 }
 
-function DetailItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-line bg-gray-50/70 px-3.5 py-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</p>
-      <p className="mt-1.5 text-sm font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function DecisionButton({
-  action,
+function LoginCard({
+  title,
+  description,
+  button,
   onClick,
-  disabled,
-  style,
 }: {
-  action: DecisionAction;
-  onClick: (action: DecisionAction) => void;
-  disabled: boolean;
-  style: 'primary' | 'secondary' | 'quiet';
+  title: string;
+  description: string;
+  button: string;
+  onClick: () => void;
 }) {
-  const styles = {
-    primary: 'bg-forest text-white hover:bg-emerald-800',
-    secondary: 'border border-emerald-200 bg-emerald-50 text-forest hover:bg-emerald-100',
-    quiet: 'border border-line bg-white text-ink hover:bg-gray-50',
-  };
-
   return (
-    <button
-      type="button"
-      onClick={() => onClick(action)}
-      disabled={disabled}
-      className={`min-h-11 rounded-xl px-3 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${styles[style]}`}
-    >
-      {action}
-    </button>
+    <article className="surface-card flex flex-col p-6">
+      <div className="mb-5 h-10 w-10 rounded-xl bg-[#eaf2ec] p-2.5 text-[#286047]">
+        <span className="block h-full rounded-md border-2 border-current" />
+      </div>
+      <h2 className="text-lg font-semibold">{title}</h2>
+      <p className="mt-2 min-h-12 text-sm leading-6 text-[#718078]">{description}</p>
+      <button className="button-primary mt-6 w-full" onClick={onClick}>
+        {button}
+      </button>
+    </article>
   );
+}
+
+function CustomerPortal({ onSubmit }: { onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  return (
+    <section className="animate-fade-up mx-auto max-w-2xl">
+      <PageHeading eyebrow="Customer Portal" title="Tell us what happened" subtitle="Share your order details and our team will review your request." />
+      <form onSubmit={onSubmit} className="surface-card mt-7 space-y-5 p-6 sm:p-8">
+        <Field label="Order ID">
+          <input className="input" name="order-id" placeholder="#1234" required />
+        </Field>
+        <Field label="Describe the issue">
+          <textarea className="input min-h-32 resize-y" name="issue" placeholder="Tell us what went wrong with your order..." required minLength={5} />
+        </Field>
+        <Field label="Upload photo of damage" hint="Optional · JPG, PNG, or another image file">
+          <input className="file-input" type="file" name="damage-photo" accept="image/*" />
+        </Field>
+        <Field label="Bank name & account number" hint="Used only to prepare a refund destination in this workspace.">
+          <input className="input" name="bank-account" placeholder="Maybank 1234" required />
+        </Field>
+        <button className="button-primary w-full" type="submit">
+          Submit Refund Request
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function StaffWorkspace({
+  requests,
+  activeTab,
+  onTabChange,
+  selectedId,
+  onSelect,
+  onRetryAnalyze,
+  loadingId,
+  onSubmitToBoss,
+  onOpenPayment,
+  onSendMessage,
+  onShareReceipt,
+}: {
+  requests: RefundRequest[];
+  activeTab: 'customer' | 'tasks';
+  onTabChange: (tab: 'customer' | 'tasks') => void;
+  selectedId: string | null;
+  onSelect: (request: RefundRequest) => void;
+  onRetryAnalyze: (request: RefundRequest) => void;
+  loadingId: string | null;
+  onSubmitToBoss: (request: RefundRequest) => void;
+  onOpenPayment: (request: RefundRequest) => void;
+  onSendMessage: (request: RefundRequest) => void;
+  onShareReceipt: (request: RefundRequest) => void;
+}) {
+  const incoming = requests.filter((request) => request.status === 'customer-pending');
+  const tasks = requests.filter(
+    (request) =>
+      (request.status === 'approved-pending-execution' || request.status === 'rejected') &&
+      !request.receiptShared,
+  );
+  const selected = requests.find((request) => request.id === selectedId);
+  return (
+    <section className="animate-fade-up">
+      <PageHeading eyebrow="Staff Portal · Ahmad" title="Request review" subtitle="Validate customer details before sending a request to the owner." />
+      <Tabs
+        tabs={[
+          { id: 'customer', label: 'Customer Pending', count: incoming.length },
+          { id: 'tasks', label: 'My Tasks', count: tasks.length },
+        ]}
+        active={activeTab}
+        onChange={(tab) => onTabChange(tab as 'customer' | 'tasks')}
+      />
+      {activeTab === 'customer' ? (
+        <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(250px,0.8fr)_minmax(0,1.5fr)]">
+          <RequestList
+            requests={incoming}
+            selectedId={selectedId}
+            empty="New customer requests will appear here."
+            onSelect={onSelect}
+          />
+          {selected ? (
+            <CustomerReview
+              request={selected}
+              loading={loadingId === selected.id}
+              onAnalyze={() => onRetryAnalyze(selected)}
+              onSubmit={() => onSubmitToBoss(selected)}
+            />
+          ) : (
+            <EmptyPanel title="Select a request" description="Choose a customer request to run the AI and completeness review." />
+          )}
+        </div>
+      ) : (
+        <div className="mt-5 space-y-4">
+          {tasks.length === 0 ? (
+            <EmptyPanel title="You're all caught up" description="Owner decisions that need a customer message or receipt will show here." />
+          ) : (
+            tasks.map((request) => (
+              <StaffTask
+                key={request.id}
+                request={request}
+                onOpenPayment={() => onOpenPayment(request)}
+                onSend={() => onSendMessage(request)}
+                onShare={() => onShareReceipt(request)}
+              />
+            ))
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CustomerReview({
+  request,
+  loading,
+  onAnalyze,
+  onSubmit,
+}: {
+  request: RefundRequest;
+  loading: boolean;
+  onAnalyze: () => void;
+  onSubmit: () => void;
+}) {
+  const isKnown = customers.some((customer) => customer.name.toLowerCase() === request.analysis?.customer_name.toLowerCase());
+  return (
+    <article className="surface-card p-6 sm:p-7">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="eyebrow">Customer request</p>
+          <h2 className="mt-1 text-xl font-semibold">{request.orderId}</h2>
+        </div>
+        <StatusBadge status="Customer Pending" />
+      </div>
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        <InfoItem label="Issue" value={request.message} />
+        <InfoItem label="Photo" value={request.photoAttached ? `Attached · ${request.photoName}` : 'Not attached'} />
+        <InfoItem label="Destination details" value={maskBank(request.bankAccount)} />
+        <InfoItem label="Submitted" value={new Date(request.submittedAt).toLocaleString()} />
+      </div>
+      {request.analysis ? (
+        <div className="mt-6 rounded-2xl border border-[#e6ece7] bg-[#f8faf8] p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-semibold">AI extraction & validity</h3>
+            <span className="text-[11px] font-medium uppercase tracking-wide text-[#64806f]">Orbyte CRM · local profile</span>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <InfoItem label="Customer" value={`${request.analysis.customer_name}${isKnown ? ' · VIP profile' : ' · New Customer'}`} />
+            <InfoItem label="Amount" value={`RM ${request.analysis.amount.toFixed(2)}`} />
+            <InfoItem label="Reason" value={request.analysis.reason} />
+          </div>
+          <div className="mt-5 flex items-center justify-between text-sm">
+            <span className="font-medium">Validity score</span>
+            <span className="font-semibold text-[#286047]">{request.validityScore}%</span>
+          </div>
+          <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-[#e3ebe5]">
+            <div className="h-full rounded-full bg-[#55a06f] transition-all" style={{ width: `${request.validityScore}%` }} />
+          </div>
+          <p className="mt-2 text-xs text-[#758279]">
+            Based on issue detail, photo attachment, and bank details provided.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className={`badge ${request.analysis.sentiment === 'Angry' ? 'badge-red' : request.analysis.sentiment === 'Polite' ? 'badge-green' : 'badge-neutral'}`}>
+              {request.analysis.sentiment} sentiment
+            </span>
+            <span className="badge badge-neutral">{request.analysis.recommendation} · {request.analysis.confidence}%</span>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-[#66766d]">{request.analysis.reasoning}</p>
+        </div>
+      ) : (
+        <div className="mt-6 rounded-xl bg-[#f3f7f3] p-4 text-sm text-[#617169]">
+          {loading ? (
+            <span className="inline-flex items-center gap-2"><span className="spinner" /> Querying Orbyte data & analyzing...</span>
+          ) : (
+            'Select this request from the queue to analyze the message and check required details.'
+          )}
+        </div>
+      )}
+      <div className="mt-6 flex flex-wrap justify-end gap-3">
+        {!request.analysis && (
+          <button className="button-secondary" onClick={onAnalyze} disabled={loading}>
+            {loading ? 'Analyzing…' : 'Analyze Request'}
+          </button>
+        )}
+        <button className="button-primary" onClick={onSubmit} disabled={!request.analysis || request.validityScore === undefined}>
+          Verify &amp; Send to Boss
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function StaffTask({
+  request,
+  onOpenPayment,
+  onSend,
+  onShare,
+}: {
+  request: RefundRequest;
+  onOpenPayment: () => void;
+  onSend: () => void;
+  onShare: () => void;
+}) {
+  const canSend = !request.messageSent && (request.decision !== 'Approve Cash' || request.paymentConfirmed);
+  const canShare = request.messageSent && !request.receiptShared && (request.decision !== 'Approve Cash' || request.paymentConfirmed);
+  return (
+    <article className="surface-card p-5 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="eyebrow">My Task · {request.orderId}</p>
+          <h3 className="mt-1 text-lg font-semibold">{request.analysis?.customer_name ?? 'Customer'}</h3>
+        </div>
+        <StatusBadge status={request.status === 'rejected' ? 'Rejected' : request.paymentConfirmed ? 'Transfer complete' : 'Approved · pending execution'} />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <InfoItem label="Decision" value={request.decision ?? 'Awaiting decision'} />
+        {request.transactionId && <InfoItem label="Transaction" value={request.transactionId} />}
+      </div>
+      {request.decision === 'Approve Cash' && !request.paymentConfirmed && (
+        <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Cash transfer is awaiting confirmation in the payment workspace.
+        </p>
+      )}
+      <div className="mt-5 rounded-xl border border-[#e7ece8] bg-[#fafcfb] p-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-[#78867e]">WhatsApp message draft</p>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#44564c]">{request.draft || 'Preparing the customer message…'}</p>
+      </div>
+      <div className="mt-5 flex flex-wrap justify-end gap-3">
+        {request.decision === 'Approve Cash' && !request.paymentConfirmed && (
+          <button className="button-secondary" onClick={onOpenPayment}>Open Payment Gateway</button>
+        )}
+        {canSend ? (
+          <button className="button-primary" disabled={!request.draft} onClick={onSend}>Send Message to Customer</button>
+        ) : canShare ? (
+          <button className="button-primary" onClick={onShare}>Share Receipt with Customer</button>
+        ) : (
+          <span className="self-center text-sm text-[#748178]">
+            {request.receiptShared ? 'Receipt shared' : 'Complete the required steps to share the receipt.'}
+          </span>
+        )}
+      </div>
+      {request.receiptShared && <OrbyteReceipt id={request.obId} />}
+    </article>
+  );
+}
+
+function BossWorkspace({
+  requests,
+  activeTab,
+  onTabChange,
+  selectedId,
+  onSelect,
+  autoPilot,
+  onAutoPilotChange,
+  onGenerate,
+  loadingId,
+  onDecision,
+  language,
+  onLanguageChange,
+}: {
+  requests: RefundRequest[];
+  activeTab: 'queue' | 'activity';
+  onTabChange: (tab: 'queue' | 'activity') => void;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  autoPilot: boolean;
+  onAutoPilotChange: (enabled: boolean) => void;
+  onGenerate: (request: RefundRequest) => void;
+  loadingId: string | null;
+  onDecision: (request: RefundRequest, decision: Decision) => void;
+  language: Language;
+  onLanguageChange: (language: Language) => void;
+}) {
+  const queue = requests.filter((request) => request.status === 'boss-pending');
+  const activity = requests.filter((request) => request.status !== 'customer-pending');
+  const selected = queue.find((request) => request.id === selectedId) ?? queue[0];
+  return (
+    <section className="animate-fade-up">
+      <PageHeading eyebrow="Owner Workspace" title="Approval queue" subtitle="Review validated requests, apply judgment, and track every outcome." />
+      <div className="surface-card mt-6 flex flex-wrap items-center justify-between gap-4 p-4 sm:px-5">
+        <div>
+          <p className="font-semibold">Auto-Pilot</p>
+          <p className="mt-1 text-sm text-[#748178]">Auto-approve AI-approved requests under RM50 with validity above 90%.</p>
+        </div>
+        <button
+          role="switch"
+          aria-checked={autoPilot}
+          aria-label="Auto-Pilot"
+          onClick={() => onAutoPilotChange(!autoPilot)}
+          className={`relative h-7 w-12 rounded-full transition ${autoPilot ? 'bg-[#347a54]' : 'bg-[#cbd4ce]'}`}
+        >
+          <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${autoPilot ? 'left-6' : 'left-1'}`} />
+        </button>
+      </div>
+      <Tabs
+        tabs={[
+          { id: 'queue', label: 'Approval Queue', count: queue.length },
+          { id: 'activity', label: 'Activity Log', count: activity.length },
+        ]}
+        active={activeTab}
+        onChange={(tab) => onTabChange(tab as 'queue' | 'activity')}
+      />
+      {activeTab === 'queue' ? (
+        <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(250px,0.8fr)_minmax(0,1.5fr)]">
+          <RequestList
+            requests={queue}
+            selectedId={selected?.id ?? null}
+            empty="Verified requests from Staff will appear here."
+            onSelect={(request) => onSelect(request.id)}
+          />
+          {selected ? (
+            <BossReview
+              request={selected}
+              loading={loadingId === selected.id}
+              onGenerate={() => onGenerate(selected)}
+              onDecision={(decision) => onDecision(selected, decision)}
+              language={language}
+              onLanguageChange={onLanguageChange}
+            />
+          ) : (
+            <EmptyPanel title="No requests awaiting approval" description="Customer submissions will appear here after Staff review." />
+          )}
+        </div>
+      ) : (
+        <ActivityLog requests={activity} />
+      )}
+    </section>
+  );
+}
+
+function BossReview({
+  request,
+  loading,
+  onGenerate,
+  onDecision,
+  language,
+  onLanguageChange,
+}: {
+  request: RefundRequest;
+  loading: boolean;
+  onGenerate: () => void;
+  onDecision: (decision: Decision) => void;
+  language: Language;
+  onLanguageChange: (language: Language) => void;
+}) {
+  const analysis = request.analysis;
+  const isKnown = customers.some((customer) => customer.name.toLowerCase() === analysis?.customer_name.toLowerCase());
+  return (
+    <article className="surface-card p-6 sm:p-7">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="eyebrow">Request from Ahmad · {request.orderId}</p>
+          <h2 className="mt-1 text-xl font-semibold">Refund review</h2>
+        </div>
+        <StatusBadge status="Pending approval" />
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        <InfoItem label="Customer" value={analysis ? `${analysis.customer_name}${isKnown ? ' · VIP' : ' · New Customer'}` : 'Not analyzed'} />
+        <InfoItem label="Amount" value={analysis ? `RM ${analysis.amount.toFixed(2)}` : 'Not analyzed'} />
+        <InfoItem label="Reason" value={analysis?.reason ?? 'Not analyzed'} />
+      </div>
+      {analysis && (
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <span className={`badge ${analysis.sentiment === 'Angry' ? 'badge-red' : analysis.sentiment === 'Polite' ? 'badge-green' : 'badge-neutral'}`}>
+            {analysis.sentiment} sentiment
+          </span>
+          <span className="badge badge-neutral">Validity {request.validityScore}%</span>
+          <span className="badge badge-green">Orbyte CRM · local profile</span>
+        </div>
+      )}
+      <div className="mt-5 rounded-xl border border-[#e4ebe5] bg-[#f8faf8] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold">AI recommendation</p>
+          {analysis && <span className="text-sm font-semibold text-[#286047]">{analysis.confidence}% confidence</span>}
+        </div>
+        {analysis ? (
+          <>
+            <p className="mt-2 text-lg font-semibold text-[#254d3a]">{analysis.recommendation}</p>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e1e9e3]">
+              <div className="h-full rounded-full bg-[#53a06d]" style={{ width: `${analysis.confidence}%` }} />
+            </div>
+            <p className="mt-3 text-sm leading-6 text-[#66766d]">{analysis.reasoning}</p>
+          </>
+        ) : (
+          <p className="mt-2 text-sm text-[#748178]">Generate a recommendation to review the customer message.</p>
+        )}
+        <button className="button-secondary mt-4" onClick={onGenerate} disabled={loading}>
+          {loading ? <span className="inline-flex items-center gap-2"><span className="spinner" /> Querying Orbyte data &amp; analyzing...</span> : 'Generate AI Recommendation'}
+        </button>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+        <InfoItem label="Customer issue" value={request.message} />
+        <InfoItem label="Photo" value={request.photoAttached ? `Attached · ${request.photoName}` : 'Not attached'} />
+        <InfoItem label="Destination account" value={request.bankAccount || 'Not provided'} />
+        <InfoItem label="AI validity checks" value={`${request.photoAttached ? 'Photo attached' : 'No photo'} · ${request.bankAccount ? 'Bank details provided' : 'Bank details missing'}`} />
+      </div>
+      <Field label="WhatsApp draft language">
+        <select className="input mt-2" value={language} onChange={(event) => onLanguageChange(event.target.value as Language)}>
+          {languages.map((item) => <option key={item}>{item}</option>)}
+        </select>
+      </Field>
+      <div className="mt-5 grid gap-2 sm:grid-cols-3">
+        {decisions.map((decision) => (
+          <button key={decision} onClick={() => onDecision(decision)} disabled={!analysis} className={decision === 'Reject' ? 'button-danger' : 'button-primary'}>
+            {decision}
+          </button>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function ActivityLog({ requests }: { requests: RefundRequest[] }) {
+  if (!requests.length) {
+    return <div className="mt-5"><EmptyPanel title="No activity yet" description="Owner decisions and Auto-Pilot actions will be recorded here." /></div>;
+  }
+  return (
+    <div className="surface-card mt-5 divide-y divide-[#e8ede9]">
+      {requests.map((request) => (
+        <article key={request.id} className="animate-fade-up p-5 sm:px-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-[#758279]">{request.orderId} · {request.analysis?.customer_name ?? 'Customer'}</p>
+              <h3 className="mt-1 font-semibold">{request.decision ?? 'Request update'}</h3>
+            </div>
+            <StatusBadge status={request.status === 'executed' ? 'Executed by Staff' : request.status === 'rejected' ? 'Rejected' : request.paymentConfirmed ? 'Transfer complete · pending Staff' : request.autoApproved ? 'Auto-approved · pending transfer' : 'Approved · pending Staff'} />
+          </div>
+          <p className="mt-2 text-sm text-[#68776f]">
+            {request.autoApproved ? 'Auto-Pilot' : 'Owner'} → {request.status === 'executed' ? 'Staff completed the request' : request.status === 'rejected' ? 'Staff notification pending or complete' : 'Staff execution pending'}
+            {request.overrideReason ? ` · Override: ${request.overrideReason}` : ''}
+          </p>
+          {request.transactionId && <p className="mt-1 text-xs text-[#68776f]">Transaction reference: {request.transactionId}</p>}
+          {request.draft && <p className="mt-3 line-clamp-2 text-sm text-[#52645a]">{request.draft}</p>}
+          {request.obId && <OrbyteReceipt id={request.obId} />}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function PaymentModal({
+  request,
+  walletBalance,
+  loading,
+  onConfirm,
+  onClose,
+}: {
+  request: RefundRequest;
+  walletBalance: number;
+  loading: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const paid = Boolean(request.transactionId);
+  const amount = request.analysis?.amount ?? 0;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#102219]/55 p-4 backdrop-blur-sm">
+      <section role="dialog" aria-modal="true" aria-labelledby="payment-title" className="animate-fade-up w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl sm:p-8">
+        {paid ? (
+          <div className="text-center">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[#e8f5eb] text-3xl text-[#32804d]">✓</div>
+            <h2 id="payment-title" className="mt-5 text-2xl font-semibold">Transfer Successful</h2>
+            <p className="mt-2 text-[#68776f]">RM {amount.toFixed(2)} refund prepared for {request.analysis?.customer_name}.</p>
+            <div className="mt-5 rounded-xl bg-[#f4f7f4] p-4 text-sm">
+              <p><span className="text-[#78867e]">Transaction</span> <strong className="ml-2">{request.transactionId}</strong></p>
+              <p className="mt-2"><span className="text-[#78867e]">Remaining business cash</span> <strong className="ml-2">RM {walletBalance.toLocaleString()}</strong></p>
+            </div>
+            <p className="mt-4 text-xs text-[#859189]">Payment Gateway · Preview</p>
+            <button className="button-primary mt-6 w-full" onClick={onClose}>Done</button>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="eyebrow">Payment Gateway · Preview</p>
+                <h2 id="payment-title" className="mt-1 text-2xl font-semibold">Processing Refund</h2>
+              </div>
+              <button className="rounded-lg px-2 py-1 text-xl text-[#758279]" aria-label="Close payment window" onClick={onClose}>×</button>
+            </div>
+            <p className="mt-2 text-sm text-[#68776f]">Review the payout details before confirming this workspace action.</p>
+            <div className="mt-6 space-y-4 rounded-2xl border border-[#e8ede9] p-4">
+              <InfoItem label="Refund amount" value={`RM ${amount.toFixed(2)}`} />
+              <InfoItem label="Customer" value={request.analysis?.customer_name ?? 'Customer'} />
+              <InfoItem label="Destination account" value={maskBank(request.bankAccount)} />
+              <InfoItem label="Order" value={request.orderId} />
+            </div>
+            <p className="mt-4 text-xs leading-5 text-[#859189]">No bank connection is configured. Confirming creates a local transaction reference only.</p>
+            <button className="button-primary mt-5 w-full" disabled={loading || !request.bankAccount.trim()} onClick={onConfirm}>
+              {loading ? <span className="inline-flex items-center gap-2"><span className="spinner" /> Connecting to Payment Gateway...</span> : 'Confirm Transfer'}
+            </button>
+            {!request.bankAccount.trim() && <p className="mt-2 text-center text-xs text-red-700">Bank destination details are required to continue.</p>}
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function OverrideModal({
+  onChoose,
+  onCancel,
+}: {
+  onChoose: (reason: string) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#102219]/50 p-4 backdrop-blur-sm">
+      <section role="dialog" aria-modal="true" aria-labelledby="override-title" className="animate-fade-up w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+        <p className="eyebrow">Decision override</p>
+        <h2 id="override-title" className="mt-2 text-xl font-semibold">Why are you changing the recommendation?</h2>
+        <p className="mt-2 text-sm text-[#718078]">Choose a reason to add it to the activity record.</p>
+        <div className="mt-5 grid gap-2">
+          {['Policy Violation', 'Too Expensive', 'Other'].map((reason) => (
+            <button key={reason} className="button-secondary w-full justify-start" onClick={() => onChoose(reason)}>{reason}</button>
+          ))}
+        </div>
+        <button className="mt-4 w-full py-2 text-sm font-medium text-[#68776f]" onClick={onCancel}>Cancel</button>
+      </section>
+    </div>
+  );
+}
+
+function RequestList({
+  requests,
+  selectedId,
+  empty,
+  onSelect,
+}: {
+  requests: RefundRequest[];
+  selectedId: string | null;
+  empty: string;
+  onSelect: (request: RefundRequest) => void;
+}) {
+  return (
+    <aside className="surface-card h-fit overflow-hidden">
+      <div className="border-b border-[#e8ede9] px-5 py-4">
+        <h2 className="font-semibold">Requests <span className="ml-1 text-sm font-normal text-[#859189]">{requests.length}</span></h2>
+      </div>
+      {requests.length === 0 ? (
+        <p className="px-5 py-6 text-sm leading-6 text-[#78867e]">{empty}</p>
+      ) : (
+        <div className="divide-y divide-[#eef1ee]">
+          {requests.map((request) => (
+            <button key={request.id} onClick={() => onSelect(request)} className={`block w-full px-5 py-4 text-left transition hover:bg-[#f7faf7] ${request.id === selectedId ? 'bg-[#f0f6f1]' : ''}`}>
+              <span className="flex items-center justify-between gap-2">
+                <span className="font-semibold">{request.orderId}</span>
+                <span className="text-xs text-[#89958e]">{new Date(request.submittedAt).toLocaleDateString()}</span>
+              </span>
+              <span className="mt-1 block truncate text-sm text-[#718078]">{request.message}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function Tabs({
+  tabs,
+  active,
+  onChange,
+}: {
+  tabs: { id: string; label: string; count: number }[];
+  active: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="mt-7 flex gap-1 border-b border-[#dfe6e0]">
+      {tabs.map((tab) => (
+        <button key={tab.id} onClick={() => onChange(tab.id)} className={`relative px-4 py-3 text-sm font-medium ${active === tab.id ? 'text-[#24533d]' : 'text-[#78867e] hover:text-[#344a3d]'}`}>
+          {tab.label}
+          <span className="ml-2 rounded-full bg-[#edf2ee] px-2 py-0.5 text-xs">{tab.count}</span>
+          {active === tab.id && <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-[#347a54]" />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PageHeading({ eyebrow, title, subtitle }: { eyebrow: string; title: string; subtitle: string }) {
+  return (
+    <div>
+      <p className="eyebrow">{eyebrow}</p>
+      <h1 className="mt-2 text-3xl font-semibold tracking-tight text-[#173e32] sm:text-4xl">{title}</h1>
+      <p className="mt-2 max-w-2xl text-sm leading-6 text-[#718078]">{subtitle}</p>
+    </div>
+  );
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <label className="block text-sm font-medium text-[#34483d]">
+      {label}
+      {hint && <span className="mt-1 block text-xs font-normal text-[#859189]">{hint}</span>}
+      {children}
+    </label>
+  );
+}
+
+function InfoItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-xs font-medium uppercase tracking-wide text-[#87938c]">{label}</p>
+      <p className="mt-1 break-words text-sm leading-5 text-[#34483d]">{value}</p>
+    </div>
+  );
+}
+
+function EmptyPanel({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="surface-card flex min-h-64 flex-col items-center justify-center p-8 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#edf4ee] text-xl text-[#347a54]">✓</div>
+      <h2 className="mt-4 font-semibold">{title}</h2>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-[#78867e]">{description}</p>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const isRejected = status.toLowerCase().includes('reject');
+  const isDone = status.toLowerCase().includes('complete') || status.toLowerCase().includes('executed');
+  return <span className={`badge ${isRejected ? 'badge-red' : isDone ? 'badge-green' : 'badge-neutral'}`}>{status}</span>;
+}
+
+function OrbyteReceipt({ id }: { id?: string }) {
+  if (!id) return null;
+  return (
+    <p className="mt-4 border-t border-[#edf1ed] pt-3 text-xs font-medium text-[#438052]">
+      Orbyte Activity reference · {id} <span className="font-normal text-[#829087]">(preview; not synced)</span>
+    </p>
+  );
+}
+
+function maskBank(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return 'Not provided';
+  const digits = trimmed.replace(/\D/g, '');
+  const bank = trimmed.replace(/\d/g, '').replace(/[•*]/g, '').trim();
+  const masked = digits ? `•••• ${digits.slice(-4)}` : 'Account details provided';
+  return bank ? `${bank} · ${masked}` : masked;
 }
 
 export default App;

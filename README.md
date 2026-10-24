@@ -25,23 +25,26 @@ TwinBoss is a small React + Vite demo for handling SME refund exceptions with a 
 
 Without a key, the dashboard and Staff/Boss handoff still work; AI actions show a setup message. Restart the dev server after changing `.env`.
 
-## Demo flow
+## Customer → Staff → Owner workflow
 
-1. In Staff Mode, submit the fictional RM150 damaged-item refund request.
-2. Switch to Boss Mode and generate the AI recommendation.
-3. Choose Approve Cash, Offer Store Credit, or Reject.
-4. Review the generated WhatsApp draft and the decision receipt in the activity log.
+1. Open the Customer Portal and enter an order ID, issue description, optional damage photo, and bank destination.
+2. Log in as Staff (Ahmad), select the new request, and review its AI extraction and completeness score.
+3. Verify the request to send it to the Owner Approval Queue.
+4. The Owner can review the recommendation and choose Approve Cash, Offer Store Credit, or Reject. A decision that differs from the AI recommendation requires an override reason.
+5. With Auto-Pilot enabled, a request below RM50 and with a validity score above 90% is approved automatically and appears in the Activity Log.
+6. Confirm cash refunds in the Payment Gateway preview. Staff can then send the WhatsApp draft and share the receipt.
 
-The recommendation and customer message use the Groq Chat Completions API with `llama3-8b-8192`, as configured in `src/App.tsx`. If Groq no longer offers this model to your account, change the model ID there to one currently available on your Groq free tier.
+AI extraction and customer-message drafting use the Groq Chat Completions API with `openai/gpt-oss-20b`, as configured in `src/App.tsx`. The prompt includes the local customer profile and VIP business rule. Drafts can be requested in English or Malaysian Malay (Bahasa Melayu).
 
-## Important demo limits
+## Workspace boundaries
 
-- All customer and request details are fictional.
-- Requests, decisions, and receipts exist only in React memory and reset when the page reloads.
-- WhatsApp messages are drafts only; this app does not send messages, issue refunds, or connect to a payment provider.
-- Staff/Boss Mode is a presentation toggle, not authentication or access control.
-- `VITE_GROQ_API_KEY` is bundled into browser code and is visible to anyone using the app. Use only a disposable, rate-limited demo key; never use this client-side setup for a production secret.
-- Only the Groq API is called, and only when an AI action is requested. The rest of the app runs locally.
+- Customer profiles are local preview data; submitted requests and the wallet exist only in React memory and reset on refresh.
+- The Orbyte Hub and CRM labels are visual integration previews. No Orbyte API or activity log is connected.
+- The payment dialog creates a local transaction reference only. No bank transfer, WhatsApp message, or receipt is sent.
+- Role selection is a workflow preview, not authentication or secure access control.
+- The optional photo is checked for attachment only; its contents are not uploaded or sent to Groq.
+- `VITE_GROQ_API_KEY` is bundled into browser code and visible to app users. Use only a disposable, rate-limited demo key; never use this client-side setup for a production secret.
+- Only Groq is contacted, and only when an AI action is requested. The rest of the app runs locally.
 
 ## Commands
 

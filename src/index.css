@@ -24,14 +24,142 @@ body {
 }
 
 button,
-select {
+select,
+input,
+textarea {
   font: inherit;
 }
 
 button:focus-visible,
-select:focus-visible {
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
   outline: 3px solid rgba(31, 106, 80, 0.28);
   outline-offset: 2px;
+}
+
+.surface-card {
+  border: 1px solid #e5ebe6;
+  border-radius: 1rem;
+  background: #fff;
+  box-shadow: 0 12px 35px rgba(28, 47, 37, 0.06);
+}
+
+.button-primary,
+.button-secondary,
+.button-danger {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  padding: 0.65rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+
+.button-primary {
+  border: 1px solid #245b40;
+  background: #245b40;
+  color: #fff;
+}
+
+.button-primary:hover:not(:disabled) {
+  border-color: #1b4933;
+  background: #1b4933;
+  transform: translateY(-1px);
+}
+
+.button-secondary {
+  border: 1px solid #dce5de;
+  background: #fff;
+  color: #345346;
+}
+
+.button-secondary:hover:not(:disabled) {
+  border-color: #b9cbbd;
+  background: #f5f8f5;
+}
+
+.button-danger {
+  border: 1px solid #f0d0cb;
+  background: #fff8f7;
+  color: #a43e32;
+}
+
+.button-danger:hover:not(:disabled) {
+  border-color: #e9b9b1;
+  background: #fff0ed;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.input {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+  border: 1px solid #dce5de;
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 0.75rem 0.875rem;
+  color: #263b30;
+  font-size: 0.875rem;
+}
+
+.input::placeholder {
+  color: #a1aca5;
+}
+
+.file-input {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+  border: 1px dashed #cbd8ce;
+  border-radius: 0.75rem;
+  background: #f8faf8;
+  padding: 0.75rem;
+  color: #607167;
+  font-size: 0.875rem;
+}
+
+.eyebrow {
+  color: #568065;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.badge-green {
+  background: #eaf5ec;
+  color: #34724a;
+}
+
+.badge-red {
+  background: #fff0ed;
+  color: #a43e32;
+}
+
+.badge-neutral {
+  background: #eff3f0;
+  color: #58685e;
+}
+
+.animate-fade-up {
+  animation: fade-up 240ms ease-out both;
 }
 
 .app-grid {
@@ -51,6 +179,17 @@ select:focus-visible {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
