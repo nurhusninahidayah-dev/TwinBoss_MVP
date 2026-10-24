@@ -12,6 +12,7 @@ type Role = 'customer' | 'staff' | 'boss' | null;
 type Status = 'Pending' | 'Staff Verified' | 'Approved' | 'Rejected' | 'Executed';
 type RiskLevel = 'Low' | 'High' | 'Critical';
 type OwnerDecision = 'Approve Cash' | 'Offer Store Credit' | 'Reject';
+type DecisionSource = 'Auto-Pilot' | 'Boss';
 
 interface FraudAnalysis {
   validityScore: number;
@@ -39,6 +40,7 @@ interface RefundRequest {
   analysis?: FraudAnalysis;
   businessAnalysis?: BusinessAnalysis;
   decision?: OwnerDecision;
+  decisionSource?: DecisionSource;
   paymentConfirmed?: boolean;
   draft?: string;
   transactionId?: string;
@@ -358,9 +360,10 @@ function App() {
     });
     if (!eligibleRequest) return;
     const order = orderForRequest(eligibleRequest, boutiqueOrders);
-    if (!order) return;
+    const analysis = eligibleRequest.businessAnalysis;
+    if (!order || !analysis) return;
     const decision = enforceBusinessConstitution(
-      eligibleRequest.businessAnalysis!,
+      analysis,
       eligibleRequest,
       order,
     ).recommendation;
@@ -368,7 +371,15 @@ function App() {
     setRequests((items) =>
       items.map((item) =>
         item.id === eligibleRequest.id
-          ? { ...item, status, decision, paymentConfirmed: false, activityId: newActivityId() }
+          ? {
+              ...item,
+              status,
+              decision,
+              decisionSource: 'Auto-Pilot',
+              paymentConfirmed: false,
+              draft: undefined,
+              activityId: newActivityId(),
+            }
           : item,
       ),
     );
@@ -440,6 +451,7 @@ function App() {
                 status: 'Staff Verified',
                 businessAnalysis,
                 decision: undefined,
+                decisionSource: undefined,
               }
             : item,
         ),
@@ -469,6 +481,7 @@ function App() {
         ...request,
         status: 'Rejected',
         decision,
+        decisionSource: 'Boss',
         paymentConfirmed: false,
         draft: undefined,
         activityId: newActivityId(),
@@ -488,8 +501,10 @@ function App() {
               ...item,
               status: 'Approved',
               decision,
+              decisionSource: 'Boss',
               paymentConfirmed: false,
               draft: undefined,
+              activityId: newActivityId(),
             }
           : item,
       ),
@@ -1184,8 +1199,12 @@ function StaffTask({
             : `Refund completed · ${request.transactionId}`}
         </div>
       )}
-      {(request.status === 'Executed' || request.status === 'Rejected') && (
-        <OrbyteReceipt activityId={request.activityId} />
+      {['Approved', 'Executed', 'Rejected'].includes(request.status) && (
+        <OrbyteReceipt
+          activityId={request.activityId}
+          decision={request.decision}
+          decisionSource={request.decisionSource}
+        />
       )}
     </article>
   );
@@ -1258,7 +1277,10 @@ function BossWorkspace({
                 <p className="eyebrow">{selected.status === 'Staff Verified' ? 'Staff-verified request' : 'Request overview'}</p>
                 <h2 className="mt-1 text-xl font-semibold">{selected.orderId} · {selected.customerName}</h2>
               </div>
-              <StatusBadge status={selected.status} />
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StatusBadge status={selected.status} />
+                <ApprovalOriginBadge request={selected} />
+              </div>
             </div>
             <div className="mt-5 rounded-xl bg-[#fbfcfb] p-4">
               {(() => {
@@ -1307,8 +1329,12 @@ function BossWorkspace({
             {selected.status === 'Rejected' && (
               <p className="mt-5 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">Rejected. No payment will be processed.</p>
             )}
-            {(selected.status === 'Executed' || selected.status === 'Rejected') && (
-              <OrbyteReceipt activityId={selected.activityId} />
+            {['Approved', 'Executed', 'Rejected'].includes(selected.status) && (
+              <OrbyteReceipt
+                activityId={selected.activityId}
+                decision={selected.decision}
+                decisionSource={selected.decisionSource}
+              />
             )}
             <div className="mt-5 border-t border-[#e7ece8] pt-3">
               <ReadOnlyField label="Bank name" value={selected.bankName} />
@@ -1375,15 +1401,38 @@ function BusinessRecommendationCard({ analysis }: { analysis: BusinessAnalysis }
   );
 }
 
-function OrbyteReceipt({ activityId }: { activityId?: string }) {
-  const [receiptId] = useState(() => activityId ?? newActivityId());
+function OrbyteReceipt({
+  activityId,
+  decision,
+  decisionSource,
+}: {
+  activityId?: string;
+  decision?: OwnerDecision;
+  decisionSource?: DecisionSource;
+}) {
+  const actionTaken =
+    decisionSource === 'Auto-Pilot'
+      ? decision === 'Reject'
+        ? 'Auto-Pilot Rejection.'
+        : 'Auto-Pilot Approval.'
+      : decisionSource === 'Boss'
+        ? decision === 'Reject'
+          ? 'Owner Rejection.'
+          : 'Manual Owner Approval.'
+        : undefined;
   return (
-    <p
+    <div
       className="mt-4 border-t border-[#edf1ed] pt-3 text-xs font-medium text-[#438052]"
       title="Orbyte Activity Log connection is a visual preview; this receipt has not been synced to an external service."
     >
-      ✅ Synced to Orbyte Activity Log (ID: {receiptId}) <span className="font-normal text-[#78867e]">· Preview only, not synced</span>
-    </p>
+      <p>
+        Orbyte Activity Log preview (ID: {activityId ?? 'Not generated'})
+        <span className="font-normal text-[#78867e]"> · Not synced</span>
+      </p>
+      {actionTaken && (
+        <p className="mt-1 font-semibold text-[#52645a]">Action taken: {actionTaken}</p>
+      )}
+    </div>
   );
 }
 
@@ -1548,6 +1597,22 @@ function StatusBadge({ status }: { status: string }) {
   const negative = /critical|high|rejected/i.test(status);
   const positive = /low|approved|executed/i.test(status);
   return <span className={`badge ${negative ? 'badge-red' : positive ? 'badge-green' : 'badge-neutral'}`}>{status}</span>;
+}
+
+function ApprovalOriginBadge({ request }: { request: RefundRequest }) {
+  if (
+    !['Approved', 'Executed'].includes(request.status) ||
+    request.decision === 'Reject' ||
+    !request.decisionSource
+  ) {
+    return null;
+  }
+
+  return request.decisionSource === 'Auto-Pilot' ? (
+    <span className="badge badge-purple">🤖 Auto-Pilot Approved</span>
+  ) : (
+    <span className="badge badge-green">👤 Manually Approved</span>
+  );
 }
 
 function EmptyPanel({ title, description }: { title: string; description: string }) {

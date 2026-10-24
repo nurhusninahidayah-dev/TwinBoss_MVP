@@ -153,6 +153,11 @@ button:disabled {
   color: #2458a6;
 }
 
+.badge-purple {
+  background: #f2eafe;
+  color: #6841a5;
+}
+
 .badge-red {
   background: #fff0ed;
   color: #a43e32;
