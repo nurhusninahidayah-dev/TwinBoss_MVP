@@ -280,7 +280,7 @@ function enforceBusinessConstitution(
     reasoning = 'Offer store credit to compensate the customer while protecting cash flow.';
   }
 
-  return requiredDecision && analysis.recommendation !== requiredDecision
+  return requiredDecision && reasoning !== undefined && analysis.recommendation !== requiredDecision
     ? { ...analysis, recommendation: requiredDecision, reasoning }
     : analysis;
 }
