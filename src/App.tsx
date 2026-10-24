@@ -40,6 +40,7 @@ interface RefundRequest {
   status: Status;
   analysis?: FraudAnalysis;
   businessAnalysis?: BusinessAnalysis;
+  isHighRisk?: boolean;
   decision?: OwnerDecision;
   decisionSource?: DecisionSource;
   paymentConfirmed?: boolean;
@@ -470,6 +471,15 @@ function App() {
   const verifyRequest = async (request: RefundRequest) => {
     const order = orderForRequest(request, boutiqueOrders);
     if (request.status !== 'Pending' || !request.analysis || !order || order.isRefunded) return;
+    if (
+      request.isHighRisk ||
+      request.analysis.riskLevel !== 'Low' ||
+      request.analysis.validityScore < autoPilotValidityThreshold ||
+      !nameMatches(request.customerName, order)
+    ) {
+      setActionError('High-risk requests must be escalated to the Owner for rejection.');
+      return;
+    }
     setActionError('');
     setBusyRequestId(request.id);
     try {
@@ -496,8 +506,50 @@ function App() {
     }
   };
 
+  const escalateHighRiskRequest = (request: RefundRequest) => {
+    const order = orderForRequest(request, boutiqueOrders);
+    const isHighRisk = Boolean(
+      request.analysis &&
+        (request.analysis.riskLevel !== 'Low' ||
+          request.analysis.validityScore < autoPilotValidityThreshold ||
+          (order && !nameMatches(request.customerName, order))),
+    );
+    if (request.status !== 'Pending' || !request.analysis || !isHighRisk) {
+      setActionError('Only a high-risk pending request can be escalated for rejection.');
+      return;
+    }
+    const businessAnalysis: BusinessAnalysis = {
+      recommendation: 'Reject',
+      confidence: 100,
+      reasoning: 'Flagged as High Risk by AI Fraud Engine. Name mismatch or missing evidence.',
+    };
+    setRequests((items) =>
+      items.map((item) =>
+        item.id === request.id
+          ? {
+              ...item,
+              status: 'Staff Verified',
+              isHighRisk: true,
+              businessAnalysis,
+              decision: undefined,
+              decisionSource: undefined,
+              paymentConfirmed: false,
+              draft: undefined,
+            }
+          : item,
+      ),
+    );
+    setSelectedStaffId(null);
+    setActionError('');
+    setToast(`${request.orderId} escalated to the Owner for rejection.`);
+  };
+
   const decideRequest = (request: RefundRequest, decision: OwnerDecision) => {
     const order = orderForRequest(request, boutiqueOrders);
+    if (request.isHighRisk && decision !== 'Reject') {
+      setActionError('High-risk requests can only be rejected by the Owner.');
+      return;
+    }
     if (
       request.status !== 'Staff Verified' ||
       !order ||
@@ -804,6 +856,7 @@ function App() {
               onSelect={(request) => void analyzeRequest(request)}
               onVerify={verifyRequest}
               onRequestCustomerVerification={requestVerificationViaWhatsApp}
+              onEscalateHighRisk={escalateHighRiskRequest}
               onProcessPayment={(request) => setPaymentRequestId(request.id)}
               onPrepareNotice={prepareCustomerNotice}
             />
@@ -1020,6 +1073,7 @@ function StaffWorkspace({
   onSelect,
   onVerify,
   onRequestCustomerVerification,
+  onEscalateHighRisk,
   onProcessPayment,
   onPrepareNotice,
 }: {
@@ -1030,6 +1084,7 @@ function StaffWorkspace({
   onSelect: (request: RefundRequest) => void;
   onVerify: (request: RefundRequest) => void;
   onRequestCustomerVerification: (request: RefundRequest) => void;
+  onEscalateHighRisk: (request: RefundRequest) => void;
   onProcessPayment: (request: RefundRequest) => void;
   onPrepareNotice: (request: RefundRequest) => void;
 }) {
@@ -1056,6 +1111,7 @@ function StaffWorkspace({
             onAnalyze={() => void onSelect(selected)}
             onVerify={() => onVerify(selected)}
             onRequestCustomerVerification={() => onRequestCustomerVerification(selected)}
+            onEscalateHighRisk={() => onEscalateHighRisk(selected)}
           />
         ) : (
           <EmptyPanel title="Select a pending request" description="Open a request to analyze the name, order record, and photo evidence." />
@@ -1096,6 +1152,7 @@ function StaffReview({
   onAnalyze,
   onVerify,
   onRequestCustomerVerification,
+  onEscalateHighRisk,
 }: {
   request: RefundRequest;
   order?: BoutiqueOrder;
@@ -1103,6 +1160,7 @@ function StaffReview({
   onAnalyze: () => void;
   onVerify: () => void;
   onRequestCustomerVerification: () => void;
+  onEscalateHighRisk: () => void;
 }) {
   const analysis = request.analysis;
   const validForBoss = Boolean(
@@ -1182,13 +1240,22 @@ function StaffReview({
             {validForBoss ? 'This request meets the review threshold.' : 'This request cannot be verified; resolve the risk before proceeding.'}
           </p>
           {requiresCustomerVerification ? (
-            <button
-              className="button-secondary"
-              onClick={onRequestCustomerVerification}
-              disabled={loading}
-            >
-              Request Verification via WhatsApp
-            </button>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                className="button-secondary"
+                onClick={onRequestCustomerVerification}
+                disabled={loading}
+              >
+                Request Verification via WhatsApp
+              </button>
+              <button
+                className="button-danger"
+                onClick={onEscalateHighRisk}
+                disabled={loading}
+              >
+                Escalate to Owner for Rejection
+              </button>
+            </div>
           ) : (
             <button className="button-primary" onClick={onVerify} disabled={!validForBoss || loading}>
               {loading ? 'Querying Orbyte data & analyzing...' : 'Verify & Send to Boss'}
@@ -1382,15 +1449,23 @@ function BossWorkspace({
               </p>
             )}
             {selected.status === 'Staff Verified' && (
-              <div className="mt-6 grid gap-2 sm:grid-cols-3">
-                <button className="button-primary" disabled={!canVerify(selected, boutiqueOrders)} onClick={() => onDecision(selected, 'Approve Cash')}>
-                  Approve Cash
-                </button>
-                <button className="button-secondary" disabled={!canVerify(selected, boutiqueOrders)} onClick={() => onDecision(selected, 'Offer Store Credit')}>
-                  Offer Store Credit
-                </button>
-                <button className="button-danger" onClick={() => onDecision(selected, 'Reject')}>Reject</button>
-              </div>
+              selected.isHighRisk ? (
+                <div className="mt-6 grid gap-2 sm:grid-cols-3">
+                  <button className="button-secondary" disabled>Approve Cash</button>
+                  <button className="button-secondary" disabled>Offer Store Credit</button>
+                  <button className="button-danger" onClick={() => onDecision(selected, 'Reject')}>Confirm Rejection</button>
+                </div>
+              ) : (
+                <div className="mt-6 grid gap-2 sm:grid-cols-3">
+                  <button className="button-primary" disabled={!canVerify(selected, boutiqueOrders)} onClick={() => onDecision(selected, 'Approve Cash')}>
+                    Approve Cash
+                  </button>
+                  <button className="button-secondary" disabled={!canVerify(selected, boutiqueOrders)} onClick={() => onDecision(selected, 'Offer Store Credit')}>
+                    Offer Store Credit
+                  </button>
+                  <button className="button-danger" onClick={() => onDecision(selected, 'Reject')}>Reject</button>
+                </div>
+              )
             )}
             {selected.status === 'Approved' && (
               <p className="mt-5 rounded-lg bg-[#eaf5ec] px-3 py-2 text-sm text-[#34724a]">
