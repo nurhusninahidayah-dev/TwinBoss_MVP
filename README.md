@@ -11,7 +11,7 @@ An AI-powered delegation plugin for the Orbyte ecosystem that turns SME refunds 
 | **SDG Track (1–17)** | SDG 8 — Decent Work and Economic Growth |
 | **Team Leader** | [nur husnina hidayah] |
 | **University** | [kolej profesional mara beranang] |
-| **Number of Members** | 2 , alia maisarah|
+| **Number of Members** | 2 |
 
 ## Links
 
@@ -19,8 +19,8 @@ An AI-powered delegation plugin for the Orbyte ecosystem that turns SME refunds 
 | :--- | :--- |
 | **GitHub Repository** | `https://github.com/your-username/TwinBoss_MVP` |
 | **Live Demo** | `https://twin-boss-mvp.replit.app` |
-| **RunPod Endpoint** | *N/A - See "How We Use RunPod" section below* |
-| **Slide Deck** | `see ` |
+| **RunPod Endpoint** | *N/A because cloud api ai is used instead* |
+| **Slide Deck** | `see submission folder slides pdf ` |
 | **Demo Video** | See `yt/pitch_video_link.md` |
 
 ## Overview
@@ -161,7 +161,7 @@ npm run dev
 - [x] Slide deck link added
 - [x ] Demo video link added (in `yt/pitch_video_link.md`)
 - [x] Replit used
-- [x] RunPod requirement addressed (Cloud API used instead)
+- [x] RunPod not used (Cloud API used instead)
 - [x] Preliminary submission completed (SDC2026_TeamName_Preliminary.pdf)
 - [x] Technology declaration completed (SDC2026_TeamName_TechDeclaration.pdf)
 - [x] Submission files renamed with your team name
