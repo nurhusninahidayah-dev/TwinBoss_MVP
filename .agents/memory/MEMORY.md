@@ -1,1 +1,0 @@
-- [Groq completion budgets](groq-budgets.md) — reasoning models need token headroom even for short customer drafts.
