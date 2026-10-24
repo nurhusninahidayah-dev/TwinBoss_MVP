@@ -29,6 +29,7 @@ interface BusinessAnalysis {
 interface RefundRequest {
   id: string;
   customerName: string;
+  phoneNumber: string;
   orderId: string;
   issue: string;
   photoName: string;
@@ -298,6 +299,14 @@ function makeMessage(request: RefundRequest, order: BoutiqueOrder, voucherCode?:
   return `Hi ${request.customerName}, we've reviewed your request for order ${order.orderId} (${order.itemName}). Your refund of RM${order.price.toFixed(2)} has been approved. Thank you for contacting ${boutiqueName}.`;
 }
 
+function formatMalaysianPhoneNumber(phoneNumber: string) {
+  let digits = phoneNumber.replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.startsWith('60')) return digits;
+  if (digits.startsWith('0')) return `6${digits}`;
+  return `6${digits}`;
+}
+
 function readImage(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -536,6 +545,19 @@ function App() {
     setToast(`Customer notice prepared for ${request.orderId}.`);
   };
 
+  const requestVerificationViaWhatsApp = (request: RefundRequest) => {
+    const phoneNumber = formatMalaysianPhoneNumber(request.phoneNumber);
+    if (phoneNumber.length < 10 || phoneNumber.length > 15) {
+      setActionError('The customer phone number is invalid. Ask them to update it before requesting verification.');
+      return;
+    }
+    const message = `Hi ${request.customerName}, we received your refund request for ${request.orderId}, but we need to verify some details. Could you please reply with a photo of your receipt or ID?`;
+    const whatsappUrl = `https://wa.me/${phoneNumber}?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+    setActionError('');
+    setToast('Verification request sent to customer.');
+  };
+
   const confirmPayment = async (request: RefundRequest) => {
     if (
       request.status !== 'Approved' ||
@@ -655,6 +677,7 @@ function App() {
       const request: RefundRequest = {
         id: `REQ-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
         customerName,
+      phoneNumber: String(formData.get('phone-number') ?? '').trim(),
         orderId,
         issue,
         photoName,
@@ -758,6 +781,7 @@ function App() {
               loadingId={busyRequestId}
               onSelect={(request) => void analyzeRequest(request)}
               onVerify={verifyRequest}
+              onRequestCustomerVerification={requestVerificationViaWhatsApp}
               onProcessPayment={(request) => setPaymentRequestId(request.id)}
               onPrepareNotice={prepareCustomerNotice}
             />
@@ -901,6 +925,19 @@ function CustomerPortal({
             maxLength={100}
           />
         </Field>
+        <Field label="Phone number" hint="Use your Malaysian number, for example 0123456789.">
+          <input
+            className="input"
+            name="phone-number"
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            placeholder="0123456789"
+            pattern="[0-9+().\s-]{8,24}"
+            required
+            maxLength={24}
+          />
+        </Field>
         <Field label="Order ID">
           <input
             className="input"
@@ -963,6 +1000,7 @@ function StaffWorkspace({
   loadingId,
   onSelect,
   onVerify,
+  onRequestCustomerVerification,
   onProcessPayment,
   onPrepareNotice,
 }: {
@@ -972,6 +1010,7 @@ function StaffWorkspace({
   loadingId: string | null;
   onSelect: (request: RefundRequest) => void;
   onVerify: (request: RefundRequest) => void;
+  onRequestCustomerVerification: (request: RefundRequest) => void;
   onProcessPayment: (request: RefundRequest) => void;
   onPrepareNotice: (request: RefundRequest) => void;
 }) {
@@ -997,6 +1036,7 @@ function StaffWorkspace({
             loading={loadingId === selected.id}
             onAnalyze={() => void onSelect(selected)}
             onVerify={() => onVerify(selected)}
+            onRequestCustomerVerification={() => onRequestCustomerVerification(selected)}
           />
         ) : (
           <EmptyPanel title="Select a pending request" description="Open a request to analyze the name, order record, and photo evidence." />
@@ -1036,12 +1076,14 @@ function StaffReview({
   loading,
   onAnalyze,
   onVerify,
+  onRequestCustomerVerification,
 }: {
   request: RefundRequest;
   order?: BoutiqueOrder;
   loading: boolean;
   onAnalyze: () => void;
   onVerify: () => void;
+  onRequestCustomerVerification: () => void;
 }) {
   const analysis = request.analysis;
   const validForBoss = Boolean(
@@ -1050,6 +1092,11 @@ function StaffReview({
       nameMatches(request.customerName, order) &&
       analysis?.riskLevel === 'Low' &&
       analysis.validityScore >= autoPilotValidityThreshold,
+  );
+  const requiresCustomerVerification = Boolean(
+    analysis &&
+      (analysis.riskLevel !== 'Low' ||
+        analysis.validityScore < autoPilotValidityThreshold),
   );
   return (
     <article className="surface-card p-6 sm:p-7">
@@ -1115,9 +1162,19 @@ function StaffReview({
           <p className="text-sm text-[#68776f]">
             {validForBoss ? 'This request meets the review threshold.' : 'This request cannot be verified; resolve the risk before proceeding.'}
           </p>
-          <button className="button-primary" onClick={onVerify} disabled={!validForBoss || loading}>
-            {loading ? 'Querying Orbyte data & analyzing...' : 'Verify & Send to Boss'}
-          </button>
+          {requiresCustomerVerification ? (
+            <button
+              className="button-secondary"
+              onClick={onRequestCustomerVerification}
+              disabled={loading}
+            >
+              Request Verification via WhatsApp
+            </button>
+          ) : (
+            <button className="button-primary" onClick={onVerify} disabled={!validForBoss || loading}>
+              {loading ? 'Querying Orbyte data & analyzing...' : 'Verify & Send to Boss'}
+            </button>
+          )}
         </div>
       )}
     </article>
