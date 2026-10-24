@@ -84,7 +84,11 @@ As per the Domain 2 guidelines, we do not have live access to the Orbyte platfor
 *   **Client-Side API Key Note:** For this hackathon MVP, the `VITE_GROQ_API_KEY` is bundled client-side. In a production deployment, this would be routed through a secure backend proxy.
 
 ## 🛣️ 9. Future Roadmap (Universal Decision Engine)
-While this MVP focuses strictly on Refund Exceptions (per the Domain 2 brief), the core Trust Engine is industry-agnostic. Future iterations will support:
+While this MVP focuses strictly on Refund Exceptions (per the Domain 2 brief) and uses textual/heuristic checks for attachments, the core Trust Engine is highly scalable. Future iterations will include:
+
+*   **Multimodal AI Attachment Analysis:** Upgrading from text-based LLMs to Vision-Language Models (VLMs) to actually "see" the uploaded photo. The AI will verify if the physical damage in the photo matches the customer's text description.
+*   **Catalog Image Matching:** The AI will cross-reference the uploaded photo with the official product catalog image to ensure the customer is returning the exact item they purchased (preventing "item swapping" fraud).
+*   **EXIF Data & Metadata Fraud Check:** The system will analyze the photo's metadata to ensure it was recently taken and not downloaded from the internet (e.g., detecting stock photos used for fake claims).
 *   **Supplier Payment Chasing:** AI verifies invoices against order records.
 *   **E-Invoicing Validation:** AI cleanses data before submission to LHDN.
 
@@ -95,3 +99,9 @@ While this MVP focuses strictly on Refund Exceptions (per the Domain 2 brief), t
 2. Install dependencies:
    ```bash
    npm install
+
+3.Create a .env file in the root directory and add your Groq API key:
+   ```bash
+VITE_GROQ_API_KEY=gsk_your_key_here
+
+then run npm run dev
