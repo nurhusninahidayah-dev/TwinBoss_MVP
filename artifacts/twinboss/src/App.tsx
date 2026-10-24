@@ -108,6 +108,7 @@ function AppShell({ children, role, setRole }: { children: ReactNode; role: Role
           </div>
         </div>
       </header>
+      <div className="demo-notice" role="note"><strong>Synthetic-data demo</strong> · All people, businesses and records are fictional. Orbyte sync and Boss/Staff access are simulated—not a live integration or secure sign-in. No payments or customer messages are sent.</div>
       {children}
     </main>
   </div>;
@@ -130,7 +131,7 @@ function DashboardPage({ notify }: { notify: (text: string, error?: boolean) => 
   const analyze = useAnalyzeRequest();
   const decide = useDecideRequest();
   const message = useGenerateCustomerMessage();
-  const [receipt, setReceipt] = useState<{ receiptNumber: string; chosenAction: string; requestTitle: string } | null>(null);
+  const [receipt, setReceipt] = useState<{ requestId: number; receiptNumber: string; chosenAction: string; requestTitle: string } | null>(null);
   const [messageDraft, setMessageDraft] = useState('');
   const summary = summaryQuery.data;
   const detail = detailQuery.data;
@@ -170,7 +171,7 @@ function DashboardPage({ notify }: { notify: (text: string, error?: boolean) => 
     }
     decide.mutate({ id: detail.id, data: { action, ...(reason?.trim() ? { reason: reason.trim() } : {}) } }, {
       onSuccess: async result => {
-        setReceipt({ receiptNumber: result.receiptNumber, chosenAction: result.chosenAction, requestTitle: result.requestTitle });
+        setReceipt({ requestId: result.requestId, receiptNumber: result.receiptNumber, chosenAction: result.chosenAction, requestTitle: result.requestTitle });
         setMessageDraft('');
         await invalidateDecisionData(detail.id);
         notify('Decision recorded. Receipt added to your activity trail.');
@@ -237,14 +238,15 @@ function DashboardPage({ notify }: { notify: (text: string, error?: boolean) => 
                 </div>
               </div>
               {decide.isPending && <div className="section-note" style={{ textAlign: 'center', marginTop: 8 }}>Recording your decision…</div>}
-              {receipt && <div className="receipt" role="status"><div className="receipt-num">RECEIPT {receipt.receiptNumber}</div><div className="receipt-title">{receipt.chosenAction.replace('_', ' ')} recorded</div><div className="section-note">{receipt.requestTitle} · decision saved to activity</div>
-                <div className="whatsapp-draft">
-                  <div className="ai-kicker"><MessageCircle size={13} /> Customer WhatsApp draft</div>
-                  {message.isPending ? <div className="section-note" style={{ marginTop: 8 }}>Writing a polite customer update…</div> : messageDraft ? <><p>{messageDraft}</p><button className="btn btn-quiet btn-sm" onClick={() => { void navigator.clipboard.writeText(messageDraft).then(() => notify('WhatsApp message copied.')).catch(() => notify('Could not access the clipboard. Select and copy the draft manually.', true)); }} data-testid="button-copy-whatsapp"><Copy size={13} /> Copy message</button></> : <button className="btn btn-quiet btn-sm" onClick={() => message.mutate({ id: detail.id }, { onSuccess: result => setMessageDraft(result.draft), onError: error => notify(safeError(error), true) })} disabled={message.isPending} data-testid="button-retry-whatsapp">Generate customer message</button>}
-                </div>
-                <Link href="/activity" className="section-note" style={{ display: 'inline-block', marginTop: 8, color: '#35644d', textDecoration: 'none' }} data-testid="link-open-receipt">View decision trail <ChevronRight size={12} style={{ verticalAlign: 'middle' }} /></Link></div>}
             </div>
           </>}
+              {receipt && <div className="receipt" role="status"><div className="receipt-num">RECEIPT {receipt.receiptNumber}</div><div className="receipt-title">{receipt.chosenAction.replace('_', ' ')} recorded</div><div className="section-note">{receipt.requestTitle} · decision saved to activity · Orbyte sync simulated</div>
+                <div className="whatsapp-draft">
+                  <div className="ai-kicker"><MessageCircle size={13} /> Customer WhatsApp draft</div>
+                  <div className="section-note">Review before copying. Draft only—not sent.</div>
+                  {message.isPending ? <div className="section-note" style={{ marginTop: 8 }}>Writing a polite customer update…</div> : messageDraft ? <><p>{messageDraft}</p><button className="btn btn-quiet btn-sm" onClick={async () => { try { await navigator.clipboard.writeText(messageDraft); notify('WhatsApp message copied.'); } catch { notify('Could not access the clipboard. Select and copy the draft manually.', true); } }} data-testid="button-copy-whatsapp"><Copy size={13} /> Copy message</button></> : <button className="btn btn-quiet btn-sm" onClick={() => message.mutate({ id: receipt.requestId }, { onSuccess: result => setMessageDraft(result.draft), onError: error => notify(safeError(error), true) })} disabled={message.isPending} data-testid="button-retry-whatsapp">Generate customer message</button>}
+                </div>
+                <Link href="/activity" className="section-note" style={{ display: 'inline-block', marginTop: 8, color: '#35644d', textDecoration: 'none' }} data-testid="link-open-receipt">View decision trail <ChevronRight size={12} style={{ verticalAlign: 'middle' }} /></Link></div>}
         </div>
       </section>
     </div>

@@ -88,6 +88,7 @@ button { cursor: pointer; }
 .owner-role { color:#9cb2a6; font-size:11px; margin-top:2px; }
 .sidebar-foot { margin:14px 12px 0; color:#8ea69a; font:10px var(--app-font-mono); }
 .main-area { margin-left:248px; width:calc(100% - 248px); min-height:100dvh; }
+.demo-notice { padding:12px 24px; background:#f3ecd9; color:#594c2e; border-bottom:1px solid #dfd3b4; font-size:12px; line-height:1.6; }
 .topbar { height:72px; display:flex; align-items:center; justify-content:space-between; padding:0 42px; border-bottom:1px solid hsl(var(--border)); background:rgba(249,247,240,.86); position:sticky; top:0; z-index:10; backdrop-filter:blur(12px); }
 .crumb { font:11px var(--app-font-mono); color:hsl(var(--muted-foreground)); letter-spacing:.04em; }
 .top-actions { display:flex; align-items:center; gap:14px; }
