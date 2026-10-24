@@ -16,6 +16,8 @@ import {
   GetRequestsQueryParams,
   GetRequestsResponse,
   GetRulesResponse,
+  GenerateCustomerMessageParams,
+  GenerateCustomerMessageResponse,
 } from "@workspace/api-zod";
 import {
   activityTable,
@@ -30,7 +32,7 @@ import type {
   RequestAlternative,
   RequestType,
 } from "@workspace/db";
-import { getGroqRecommendation } from "../lib/groq";
+import { getGroqCustomerMessage, getGroqRecommendation } from "../lib/groq";
 
 const router: IRouter = Router();
 
@@ -431,6 +433,37 @@ router.post("/requests/:id/decision", async (req, res): Promise<void> => {
   };
   req.log.info({ requestId: detail.id, action }, "Boss decision recorded");
   res.status(201).json(DecideRequestResponse.parse(response));
+});
+
+router.post("/requests/:id/message-draft", async (req, res): Promise<void> => {
+  const params = GenerateCustomerMessageParams.safeParse(req.params);
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
+    return;
+  }
+  const detail = await findRequestDetail(params.data.id);
+  if (!detail) {
+    res.status(404).json({ error: "Request not found" });
+    return;
+  }
+  if (!detail.decidedAction) {
+    res.status(409).json({ error: "Record an owner decision before drafting a customer update." });
+    return;
+  }
+
+  try {
+    const draft = await getGroqCustomerMessage({
+      customerName: detail.customerName,
+      requestTitle: detail.title,
+      amount: detail.amount,
+      action: detail.decidedAction.replace("_", " "),
+      reason: detail.decisionReason,
+    });
+    res.json(GenerateCustomerMessageResponse.parse({ draft }));
+  } catch (error) {
+    req.log.error({ err: error, requestId: detail.id }, "Customer WhatsApp draft generation failed");
+    res.status(502).json({ error: "TwinBoss could not draft the customer update. Try again." });
+  }
 });
 
 router.get("/customers", async (_req, res): Promise<void> => {

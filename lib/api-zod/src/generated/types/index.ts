@@ -10,6 +10,7 @@ export * from './activityItem';
 export * from './alternative';
 export * from './businessRule';
 export * from './customer';
+export * from './customerMessageDraft';
 export * from './dashboardSummary';
 export * from './decisionAction';
 export * from './decisionInput';

@@ -123,6 +123,14 @@ export interface DecisionReceipt {
   learningNote: string | null;
 }
 
+export interface CustomerMessageDraft {
+  /**
+     * @minLength 1
+     * @maxLength 1200
+     */
+  draft: string;
+}
+
 export interface Customer {
   id: number;
   name: string;

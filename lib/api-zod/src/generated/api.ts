@@ -208,6 +208,22 @@ export const DecideRequestResponse = zod.object({
 
 
 /**
+ * @summary Draft a WhatsApp customer update after an owner decision
+ */
+export const GenerateCustomerMessageParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const generateCustomerMessageResponseDraftMax = 1200;
+
+
+
+export const GenerateCustomerMessageResponse = zod.object({
+  "draft": zod.string().min(1).max(generateCustomerMessageResponseDraftMax)
+})
+
+
+/**
  * @summary List mock Orbyte customer records
  */
 export const GetCustomersResponseItem = zod.object({

@@ -139,6 +139,26 @@ paths:
                 $ref: "#/components/schemas/DecisionReceipt"
         "400":
           description: Invalid decision or missing override reason
+  /requests/{id}/message-draft:
+    post:
+      operationId: generateCustomerMessage
+      tags: [twinboss]
+      summary: Draft a WhatsApp customer update after an owner decision
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Customer message draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerMessageDraft"
+        "409":
+          description: Owner decision has not been recorded
   /customers:
     get:
       operationId: getCustomers
@@ -337,6 +357,14 @@ components:
         learningNote:
           type: ["string", "null"]
       required: [id, requestId, receiptNumber, requestTitle, customerName, staffName, requestedAmount, requestedAction, chosenAction, reason, ruleApplied, decisionBy, decidedAt, syncStatus, learningNote]
+    CustomerMessageDraft:
+      type: object
+      properties:
+        draft:
+          type: string
+          minLength: 1
+          maxLength: 1200
+      required: [draft]
     Customer:
       type: object
       properties:

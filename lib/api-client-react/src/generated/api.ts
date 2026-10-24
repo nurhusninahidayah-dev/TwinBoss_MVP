@@ -23,6 +23,7 @@ import type {
   ActivityItem,
   BusinessRule,
   Customer,
+  CustomerMessageDraft,
   DashboardSummary,
   DecisionInput,
   DecisionReceipt,
@@ -625,6 +626,80 @@ export const useDecideRequest = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getDecideRequestMutationOptions(options));
+    }
+
+export const getGenerateCustomerMessageUrl = (id: number,) => {
+
+
+
+
+  return `/api/requests/${id}/message-draft`
+}
+
+/**
+ * @summary Draft a WhatsApp customer update after an owner decision
+ */
+export const generateCustomerMessage = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<CustomerMessageDraft> => {
+
+  return customFetch<CustomerMessageDraft>(getGenerateCustomerMessageUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getGenerateCustomerMessageMutationKey = () => ['generateCustomerMessage'] as const;
+
+export const getGenerateCustomerMessageMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof generateCustomerMessage>>, TError,GenerateCustomerMessageMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof generateCustomerMessage>>, TError,GenerateCustomerMessageMutationVariables, TContext> => {
+
+const mutationKey = getGenerateCustomerMessageMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof generateCustomerMessage>>, GenerateCustomerMessageMutationVariables> = (props) => {
+          const {id} = props ?? {};
+
+          return  generateCustomerMessage(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GenerateCustomerMessageMutationResult = NonNullable<Awaited<ReturnType<typeof generateCustomerMessage>>>
+
+    export type GenerateCustomerMessageMutationError = ErrorType<void>
+    export type GenerateCustomerMessageMutationVariables = {id: number}
+
+    /**
+ * @summary Draft a WhatsApp customer update after an owner decision
+ */
+export const useGenerateCustomerMessage = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof generateCustomerMessage>>, TError,GenerateCustomerMessageMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof generateCustomerMessage>>,
+        TError,
+        GenerateCustomerMessageMutationVariables,
+        TContext
+      > => {
+      return useMutation(getGenerateCustomerMessageMutationOptions(options));
     }
 
 export const getGetCustomersUrl = () => {
