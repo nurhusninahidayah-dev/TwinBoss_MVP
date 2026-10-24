@@ -17,8 +17,8 @@ An AI-powered delegation plugin for the Orbyte ecosystem that turns SME refunds 
 
 | Resource | Link |
 | :--- | :--- |
-| **GitHub Repository** | `https://github.com/your-username/TwinBoss_MVP` |
-| **Live Demo** | `https://twin-boss-mvp.replit.app` |
+| **GitHub Repository** | `https://github.com/nurhusninahidayah-dev/TwinBoss_MVP.git` |
+| **Live Demo with replit** | `https://twin-boss-mvp.replit.app` |
 | **RunPod Endpoint** | *N/A because cloud api ai is used instead* |
 | **Slide Deck** | `see submission folder slides pdf ` |
 | **Demo Video** | See `yt/pitch_video_link.md` |
@@ -113,7 +113,7 @@ User (Customer) ──► React App ──► Mock Orbyte CRM DB (Validation)
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/TwinBoss_MVP.git
+git clone https://github.com/nurhusninahidayah-dev/TwinBoss_MVP.git
 cd TwinBoss_MVP
 
 # 2. Install dependencies
