@@ -42,3 +42,42 @@ TwinBoss perfectly hits all the must-have criteria for Domain 2:
 2.  Create a `.env` file or use Replit Secrets to add your Groq API key:
     ```env
     GROQ_API_KEY=your_gsk_key_here
+
+    Install dependencies:
+
+bash
+Copy
+Download
+pip install -r requirements.txt
+Run the application:
+
+bash
+Copy
+Download
+python main.py
+📈 7. SDG Alignment
+SDG 8 (Decent Work and Economic Growth): Empowers micro-SMEs to operate efficiently without burning out the owner.
+
+SDG 9 (Industry, Innovation, and Infrastructure): Brings safe, accessible, and governed AI automation to traditional businesses.
+
+🛡️ 8. Data Privacy & Compliance
+This project uses 100% synthetic/mock data as required by the hackathon rules. No real customer, company, or personal records are used. In a real production deployment, the system would comply with Malaysia's PDPA by ensuring all customer data remains encrypted within the Orbyte workspace, and no PII is sent to third-party LLMs without anonymization.
+
+9. Future Roadmap & Scalability (The "Universal Decision Engine")
+While our MVP focuses strictly on one clear use case (VIP Refund Exceptions) as required by the Domain 2 brief, the underlying architecture of TwinBoss is a Universal Decision Engine.
+
+The core loop—Trigger → Orbyte Data → AI Logic → Human Approval → Decision Receipt—is entirely platform-agnostic. Because we designed the AI logic to be modular, the exact same Trust Engine can be applied to other high-friction SME decision-making workflows.
+
+Future Roadmap (Post-Hackathon):
+
+Supplier Payment Chasing: AI drafts payment chasers for overdue invoices and recommends whether to escalate to a phone call.
+
+E-Invoicing Data Validation: AI extracts data from receipts, validates it against LHDN rules, and asks the Boss to approve the final submission.
+
+Staff Leave Exceptions: AI checks the SME's operational calendar and recommends whether to approve a staff leave request during a busy period.
+
+By keeping the MVP focused, we prove the concept works flawlessly. By designing for scalability, we prove TwinBoss can become a permanent, high-value plugin on the Orbyte ecosystem.
+
+Built with ❤️ by kpmbians for SDC Hackathon 2026.
+
+
