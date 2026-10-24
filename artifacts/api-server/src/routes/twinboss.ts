@@ -89,7 +89,9 @@ function learningCorrection(type: RequestType, reason: string) {
 }
 
 router.get("/dashboard/summary", async (req, res): Promise<void> => {
-  const requests = await db.select().from(requestsTable);
+  const requests = (await db.select().from(requestsTable)).filter(
+    (request) => request.type === "refund",
+  );
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
   const handledToday = requests.filter(

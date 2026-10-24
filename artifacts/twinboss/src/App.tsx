@@ -123,7 +123,7 @@ function DashboardPage({ notify }: { notify: (text: string, error?: boolean) => 
   const client = useQueryClient();
   const summaryQuery = useGetDashboardSummary();
   const requestsQuery = useGetRequests({ status: 'pending' });
-  const requests = requestsQuery.data ?? [];
+  const requests = (requestsQuery.data ?? []).filter(item => item.type === 'refund');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const selectedIdResolved = requests.some(item => item.id === selectedId) ? selectedId! : requests[0]?.id ?? 0;
   const detailQuery = useGetRequest(selectedIdResolved, { query: { enabled: selectedIdResolved > 0, queryKey: getGetRequestQueryKey(selectedIdResolved) } });
